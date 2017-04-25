@@ -87,6 +87,9 @@
         <name>$PROJ_DIR$\..\inc\MyMessage.h</name>
       </file>
       <file>
+        <name>$PROJ_DIR$\..\inc\PPTCtrl_Protocol.h</name>
+      </file>
+      <file>
         <name>$PROJ_DIR$\..\inc\ProtocolParser.h</name>
       </file>
       <file>
@@ -100,6 +103,9 @@
       </file>
       <file>
         <name>$PROJ_DIR$\..\inc\timer.h</name>
+      </file>
+      <file>
+        <name>$PROJ_DIR$\..\inc\xliNodeConfig.h</name>
       </file>
     </group>
     <group>

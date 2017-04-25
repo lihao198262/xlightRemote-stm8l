@@ -6,6 +6,14 @@
 #include "string.h"
 #include "stm8l15x_conf.h"
 
+// Simple Direct Test
+// Uncomment this line to work in Simple Direct Test Mode
+#define ENABLE_SDTM
+
+// Config Flashlight and Laser
+// Uncomment this line if need Flashlight or Laser Pen
+//#define ENABLE_FLASHLIGHT_LASER
+
 /* Exported types ------------------------------------------------------------*/
 // Common Data Type
 #define UC                        uint8_t
@@ -40,6 +48,10 @@
 #define NODEID_MAX_DEVCIE       63
 #define NODEID_MIN_REMOTE       64
 #define NODEID_MAX_REMOTE       127
+#define NODEID_PROJECTOR        128
+#define NODEID_SMARTPHONE       139
+#define NODEID_MIN_GROUP        192
+#define NODEID_MAX_GROUP        223
 #define NODEID_DUMMY            255
 #define BASESERVICE_ADDRESS     0xFE
 #define BROADCAST_ADDRESS       0xFF
@@ -51,7 +63,7 @@
 #define CT_STEP                 ((CT_MAX_VALUE-CT_MIN_VALUE)/10)
 
 #define UNIQUE_ID_LEN           8
-#define NUM_DEVICES             4
+#define NUM_DEVICES             2
 
 // Device (lamp) type
 typedef enum
@@ -122,6 +134,7 @@ typedef struct
   UC rfPowerLevel             :2;           // RF Power Level 0..3
   UC Reserved1                :6;           // Reserved bits
   DeviceInfo_t devItem[NUM_DEVICES];
+  UC fnScenario[4];
 } Config_t;
 
 extern Config_t gConfig;
@@ -139,6 +152,7 @@ extern uint8_t _uniqueID[UNIQUE_ID_LEN];
 #define IS_MIRAGE(DevType)          ((DevType) >= devtypMRing3 && (DevType) <= devtypMRing1)
 #define IS_VALID_REMOTE(DevType)    ((DevType) >= remotetypRFSimply && (DevType) <= remotetypRFEnhanced)
 
+#define IS_GROUP_NODEID(nID)       (nID >= NODEID_MIN_GROUP && nID <= NODEID_MAX_GROUP)
 #define IS_NOT_DEVICE_NODEID(nID)  ((nID < NODEID_MIN_DEVCIE || nID > NODEID_MAX_DEVCIE) && nID != NODEID_MAINDEVICE)
 #define IS_NOT_REMOTE_NODEID(nID)  (nID < NODEID_MIN_REMOTE || nID > NODEID_MAX_REMOTE)
 
@@ -166,11 +180,13 @@ extern uint8_t _uniqueID[UNIQUE_ID_LEN];
 #define CurrentDevice_G            DEVST_G(gConfig.indDevice)
 #define CurrentDevice_B            DEVST_B(gConfig.indDevice)
 
+bool WaitMutex(uint32_t _timeout);
 void UpdateNodeAddress(void);
 void RF24L01_IRQ_Handler();
 uint8_t ChangeCurrentDevice(uint8_t _newDev);
 void UpdateNodeAddress();
 bool SendMyMessage();
 void EraseCurrentDeviceInfo();
+bool SayHelloToDevice(bool infinate);
 
 #endif /* __GLOBAL_H */

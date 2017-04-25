@@ -32,7 +32,7 @@ Connections:
 */
 
 // Xlight Application Identification
-#define XLA_VERSION               0x01
+#define XLA_VERSION               0x03
 #define XLA_ORGANIZATION          "xlight.ca"               // Default value. Read from EEPROM
 #define XLA_PRODUCT_NAME          "XRemote"                 // Default value. Read from EEPROM
 
@@ -42,6 +42,8 @@ Connections:
 #define PLOAD_WIDTH                     32
 
 // Window Watchdog
+// Uncomment this line if in debug mode
+#define DEBUG_NO_WWDG
 #define WWDG_COUNTER                    0x7f
 #define WWDG_WINDOW                     0x77
 
@@ -61,8 +63,26 @@ uint8_t _uniqueID[UNIQUE_ID_LEN];
 // Moudle variables
 bool bPowerOn = FALSE;
 uint8_t mutex;
-uint8_t rx_addr[ADDRESS_WIDTH] = {0x11, 0x11, 0x11, 0x11, 0x11};
-uint8_t tx_addr[ADDRESS_WIDTH] = {0x11, 0x11, 0x11, 0x11, 0x11};
+uint8_t rx_addr[ADDRESS_WIDTH];
+uint8_t tx_addr[ADDRESS_WIDTH];
+
+bool isIdentityEmpty(const UC *pId, UC nLen)
+{
+  for( int i = 0; i < nLen; i++ ) { if(pId[i] > 0) return FALSE; }
+  return TRUE;
+}
+
+bool isIdentityEqual(const UC *pId1, const UC *pId2, UC nLen)
+{
+  for( int i = 0; i < nLen; i++ ) { if(pId1[i] != pId2[i]) return FALSE; }
+  return TRUE;
+}
+
+bool isNodeIdRequired()
+{
+  return( (IS_NOT_REMOTE_NODEID(CurrentNodeID) && !IS_GROUP_NODEID(CurrentNodeID)) || 
+         isIdentityEmpty(CurrentNetworkID, ADDRESS_WIDTH) || isIdentityEqual(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH) );
+}
 
 static void clock_init(void)
 {
@@ -75,15 +95,19 @@ static void clock_init(void)
 
 // Initialize Window Watchdog
 void wwdg_init() {
+#ifndef DEBUG_NO_WWDG  
   WWDG_Init(WWDG_COUNTER, WWDG_WINDOW);
+#endif  
 }
 
 // Feed the Window Watchdog
 void feed_wwdg(void) {
+#ifndef DEBUG_NO_WWDG    
   uint8_t cntValue = WWDG_GetCounter() & WWDG_COUNTER;
   if( cntValue < WWDG_WINDOW ) {
     WWDG_SetCounter(WWDG_COUNTER);
   }
+#endif
 }
 
 /**
@@ -96,7 +120,13 @@ void GPIO_LowPower_Config(void)
 {
   GPIO_Init(GPIOA, GPIO_Pin_2|GPIO_Pin_4, GPIO_Mode_In_FL_No_IT);
   GPIO_Init(GPIOA, GPIO_Pin_3|GPIO_Pin_5|GPIO_Pin_6|GPIO_Pin_7, GPIO_Mode_Out_PP_Low_Slow);
+
+#ifdef ENABLE_FLASHLIGHT_LASER
+  GPIO_Init(GPIOC, GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_4|GPIO_Pin_5|GPIO_Pin_6, GPIO_Mode_Out_PP_Low_Slow);
+#else  
   GPIO_Init(GPIOC, GPIO_Pin_All, GPIO_Mode_Out_PP_Low_Slow);
+#endif
+  
   //GPIO_Init(GPIOD, GPIO_Pin_0|GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3, GPIO_Mode_In_FL_No_IT);
   //GPIO_Init(GPIOB, GPIO_Pin_0, GPIO_Mode_In_FL_No_IT);
   GPIO_Init(GPIOE, GPIO_Pin_0|GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_5, GPIO_Mode_Out_PP_Low_Slow);
@@ -195,10 +225,12 @@ uint8_t *Read_UniqueID(uint8_t *UniqueID, uint16_t Length)
 // Save config to Flash
 void SaveConfig()
 {
+#ifndef ENABLE_SDTM
   if( gIsChanged ) {
     Flash_WriteBuf(FLASH_DATA_EEPROM_START_PHYSICAL_ADDRESS, (uint8_t *)&gConfig, sizeof(gConfig));
     gIsChanged = FALSE;
   }
+#endif  
 }
 
 // Init Device Status
@@ -218,8 +250,10 @@ void LoadConfig()
 {
     // Load the most recent settings from FLASH
     Flash_ReadBuf(FLASH_DATA_EEPROM_START_PHYSICAL_ADDRESS, (uint8_t *)&gConfig, sizeof(gConfig));
-    if( gConfig.version > XLA_VERSION || gConfig.indDevice >= NUM_DEVICES || 
-        !IS_VALID_REMOTE(gConfig.type) || gConfig.rfPowerLevel > RF24_PA_MAX ) {
+    if( gConfig.version > XLA_VERSION || gConfig.indDevice >= NUM_DEVICES 
+          || !IS_VALID_REMOTE(gConfig.type) || isNodeIdRequired()
+          || gConfig.rfPowerLevel > RF24_PA_MAX 
+          || strcmp(gConfig.Organization, XLA_ORGANIZATION) != 0 ) {
       memset(&gConfig, 0x00, sizeof(gConfig));
       gConfig.version = XLA_VERSION;
       gConfig.indDevice = 0;
@@ -234,32 +268,50 @@ void LoadConfig()
       // Set device info
       NodeID(0) = BASESERVICE_ADDRESS;       // NODEID_MIN_REMOTE; BASESERVICE_ADDRESS; NODEID_DUMMY
       DeviceID(0) = NODEID_MAINDEVICE;
-      DeviceType(0) = devtypUnknown;
+      DeviceType(0) = devtypDummy;
       gConfig.devItem[1] = gConfig.devItem[0];
       gConfig.devItem[2] = gConfig.devItem[0];
       gConfig.devItem[3] = gConfig.devItem[0];
+      
+      // Fn Scenario
+      gConfig.fnScenario[0] = 0;
+      gConfig.fnScenario[1] = 0;
+      gConfig.fnScenario[2] = 0;
+      gConfig.fnScenario[3] = 0;
     
       gIsChanged = TRUE;
       SaveConfig();
     }
+    // Test for CR05
+    //CurrentDeviceID = 255;
+    //gConfig.fnScenario[0] = 2;
+    //gConfig.fnScenario[1] = 3;
+    //gConfig.fnScenario[2] = 1;
 }
 
 void UpdateNodeAddress() {
   memcpy(rx_addr, CurrentNetworkID, ADDRESS_WIDTH);
   rx_addr[0] = CurrentNodeID;
   memcpy(tx_addr, CurrentNetworkID, ADDRESS_WIDTH);
-  tx_addr[0] = (CurrentNodeID >= BASESERVICE_ADDRESS ? BASESERVICE_ADDRESS : NODEID_GATEWAY);
+#ifdef ENABLE_SDTM
+  tx_addr[0] = CurrentDeviceID;
+#else
+  tx_addr[0] = (isNodeIdRequired() ? BASESERVICE_ADDRESS : NODEID_GATEWAY);
+#endif  
   RF24L01_setup(tx_addr, rx_addr, RF24_CHANNEL, BROADCAST_ADDRESS);     // With openning the boardcast pipe
-}
+}  
 
 void EraseCurrentDeviceInfo() {
+#ifndef ENABLE_SDTM  
+  LED_Blink(TRUE, 8, TRUE);
   CurrentNodeID = BASESERVICE_ADDRESS;
   CurrentDeviceID = NODEID_MAINDEVICE;
-  CurrentDeviceType = devtypUnknown;
+  CurrentDeviceType = devtypMRing3;
   CurrentDevicePresent = 0;
   memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
   gIsChanged = TRUE;
   SaveConfig();
+#endif
 }
 
 bool WaitMutex(uint32_t _timeout) {
@@ -296,7 +348,7 @@ bool SayHelloToDevice(bool infinate) {
   UpdateNodeAddress();
   while(1) {
     if( _count++ == 0 ) {
-      if( IS_NOT_REMOTE_NODEID(CurrentNodeID) ) {
+      if( isNodeIdRequired() ) {
         Msg_RequestNodeID();
       } else {
         Msg_Presentation();
@@ -343,7 +395,14 @@ int main( void ) {
   clock_init();
   timer_init();
   button_init();
-  
+
+  //GPIO_Init(GPIOC, (GPIO_Pin_0 | GPIO_Pin_2), GPIO_Mode_Out_PP_Low_Fast);
+  //SetFlashlight(DEVICE_SW_ON);
+  //SetLasterBeam(DEVICE_SW_ON);
+  //GPIO_WriteBit(GPIOC, GPIO_Pin_0, SET);
+  //GPIO_WriteBit(GPIOC, GPIO_Pin_2, SET);
+  //while (1);
+
   // Go on only if NRF chip is presented
   RF24L01_init();
   while(!NRF24L01_Check());
@@ -355,9 +414,12 @@ int main( void ) {
 
   // Init Device Status Buffer
   InitDeviceStatus();
-  
-  delay_ms(1500);   // about 1.5 sec
-  
+
+  // Blink LED to indicate starting
+  SetLasterBeam(DEVICE_SW_OFF);
+  SetFlashlight(DEVICE_SW_OFF);
+  LED_Blink(TRUE, 3, FALSE);
+ 
   // Update RF addresses and Setup RF environment
   //gConfig.nodeID = 0x11; // test
   //gConfig.nodeID = NODEID_MIN_REMOTE;   // test
@@ -369,17 +431,23 @@ int main( void ) {
   NRF2401_EnableIRQ();
 
   // Must establish connection firstly
+#ifdef ENABLE_SDTM
+  gConfig.indDevice = 0;
+  CurrentNodeID = NODEID_MIN_REMOTE;
+  CurrentDeviceID = BASESERVICE_ADDRESS;
+  memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
+  UpdateNodeAddress();
+#else  
   SayHelloToDevice(TRUE);
+#endif
 
   // Init Watchdog
   wwdg_init();
   
   // Set PowerOn flag
   bPowerOn = TRUE;
-  
+
   while (1) {
-    
-    //GPIO_WriteBit(GPIOC, GPIO_Pin_1, SET);
     
     // Feed the Watchdog
     feed_wwdg();
@@ -391,7 +459,7 @@ int main( void ) {
     SaveConfig();
     
     // Enter Low Power Mode
-    if( tmrIdleDuration > TIMEOUT_IDLE ) {
+    if( tmrIdleDuration > TIMEOUT_IDLE && !isNodeIdRequired() ) {
       tmrIdleDuration = 0;
       lowpower_config();
       bPowerOn = FALSE;

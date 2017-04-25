@@ -12,7 +12,8 @@ typedef enum
     keylstFn1,
     keylstFn2,
     keylstFn3,
-    //keylstFn4,
+    keylstFn4,
+    keylstFLASH,
     keylstDummy
 } keylist_t;
 
@@ -43,5 +44,8 @@ void SelectDeviceLED(uint8_t _dev);
 
 void button_event_handler(uint8_t _pin);
 void button_init(void);
+void SetFlashlight(uint8_t _st);
+void SetLasterBeam(uint8_t _st);
+void LED_Blink(bool _flash, uint8_t _times, bool _fast);
 
 #endif // BUTTON_H_

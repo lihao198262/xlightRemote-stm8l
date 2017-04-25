@@ -3,7 +3,7 @@
 
 #include "timer.h"
 
-#define MAX_TIMER_NUMBER    20
+#define MAX_TIMER_NUMBER    22
 
 typedef struct timer_manager_s
 {
