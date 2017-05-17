@@ -46,6 +46,6 @@ void button_event_handler(uint8_t _pin);
 void button_init(void);
 void SetFlashlight(uint8_t _st);
 void SetLasterBeam(uint8_t _st);
-void LED_Blink(bool _flash, uint8_t _times, bool _fast);
+void LED_Blink(bool _flash, bool _fast);
 
 #endif // BUTTON_H_

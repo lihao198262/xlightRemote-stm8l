@@ -58,6 +58,7 @@ DeviceStatus_t gDevStatus[NUM_DEVICES];
 MyMessage_t msg;
 uint8_t *pMsg = (uint8_t *)&msg;
 bool gIsChanged = FALSE;
+uint8_t gDelayedOperation = 0;
 uint8_t _uniqueID[UNIQUE_ID_LEN];
 
 // Moudle variables
@@ -303,7 +304,7 @@ void UpdateNodeAddress() {
 
 void EraseCurrentDeviceInfo() {
 #ifndef ENABLE_SDTM  
-  LED_Blink(TRUE, 8, TRUE);
+  gDelayedOperation = DELAY_OP_ERASEFLASH;
   CurrentNodeID = BASESERVICE_ADDRESS;
   CurrentDeviceID = NODEID_MAINDEVICE;
   CurrentDeviceType = devtypMRing3;
@@ -389,6 +390,111 @@ uint8_t ChangeCurrentDevice(uint8_t _newDev) {
   return gConfig.indDevice;
 }
 
+// Change LED or Laser to indecate execution of specific operation
+void OperationIndicator() {
+  static uint16_t tick = 0;
+  uint8_t test, step;
+  test = gDelayedOperation & 0xF0;
+  if( test == DELAY_OP_ERASEFLASH ) {
+    // LED fast blink 5 times
+    step = gDelayedOperation - DELAY_OP_ERASEFLASH;
+    if( step >= 10 ) {
+      gDelayedOperation = 0;    // Finished
+      SetFlashlight(DEVICE_SW_OFF);
+      // Soft reset
+      WWDG->CR = 0x80;
+    } else {
+      if( step == 0 ) {
+        SetFlashlight(DEVICE_SW_ON);
+        tick = 0;
+        gDelayedOperation++;
+      }
+      if( ++tick > 0x40FF ) {
+        tick = 0;
+        SetFlashlight(step % 2 ? DEVICE_SW_OFF : DEVICE_SW_ON);
+        gDelayedOperation++;
+      }
+    }
+  }
+  else if( test == DELAY_OP_PAIRED ) {
+    // LED slow blink 1 time and fast 3 times
+    step = gDelayedOperation - DELAY_OP_PAIRED;
+    if( step >= 8 ) {
+      gDelayedOperation = 0;    // Finished
+      SetFlashlight(DEVICE_SW_OFF);
+    } else {
+      if( step == 0 ) {
+        SetFlashlight(DEVICE_SW_ON);
+        tick = 0;
+        gDelayedOperation++;
+      }
+      ++tick;
+      if( (step >= 2 && tick > 0x40FF) || tick > 0xBFFF ) {
+        tick = 0;
+        SetFlashlight(step % 2 ? DEVICE_SW_OFF : DEVICE_SW_ON);
+        gDelayedOperation++;
+      }
+    }
+  }
+  else if( test == DELAY_OP_CONNECTED ) {
+    // LED fast 3 times
+    step = gDelayedOperation - DELAY_OP_CONNECTED;
+    if( step >= 6 ) {
+      gDelayedOperation = 0;    // Finished
+      SetFlashlight(DEVICE_SW_OFF);
+    } else {
+      if( step == 0 ) {
+        SetFlashlight(DEVICE_SW_ON);
+        tick = 0;
+        gDelayedOperation++;
+      }
+      if( ++tick > 0x40FF ) {
+        tick = 0;
+        SetFlashlight(step % 2 ? DEVICE_SW_OFF : DEVICE_SW_ON);
+        gDelayedOperation++;
+      }
+    }
+  }
+  else if( test == DELAY_OP_PPTMODE_ON ) {
+    // Laser slow 2 times
+    step = gDelayedOperation - DELAY_OP_PPTMODE_ON;
+    if( step >= 4 ) {
+      gDelayedOperation = 0;    // Finished
+      SetLasterBeam(DEVICE_SW_OFF);
+    } else {
+      if( step == 0 ) {
+        SetLasterBeam(DEVICE_SW_ON);
+        tick = 0;
+        gDelayedOperation++;
+      }
+      if( ++tick > 0xBFFF ) {
+        tick = 0;
+        SetLasterBeam(step % 2 ? DEVICE_SW_OFF : DEVICE_SW_ON);
+        gDelayedOperation++;
+      }
+    }
+  }
+  else if( test == DELAY_OP_PPTMODE_OFF ) {
+    // Laser fast 3 times
+    step = gDelayedOperation - DELAY_OP_PPTMODE_OFF;
+    if( step >= 6 ) {
+      gDelayedOperation = 0;    // Finished
+      SetLasterBeam(DEVICE_SW_OFF);
+    } else {
+      if( step == 0 ) {
+        SetLasterBeam(DEVICE_SW_ON);
+        tick = 0;
+        gDelayedOperation++;
+      }
+      if( ++tick > 0x40FF ) {
+        tick = 0;
+        SetLasterBeam(step % 2 ? DEVICE_SW_OFF : DEVICE_SW_ON);
+        gDelayedOperation++;
+      }
+    }
+  }
+}
+
 int main( void ) {
 
   // Init clock, timer and button
@@ -418,7 +524,8 @@ int main( void ) {
   // Blink LED to indicate starting
   SetLasterBeam(DEVICE_SW_OFF);
   SetFlashlight(DEVICE_SW_OFF);
-  LED_Blink(TRUE, 3, FALSE);
+  LED_Blink(TRUE, FALSE);
+  LED_Blink(TRUE, FALSE);
  
   // Update RF addresses and Setup RF environment
   //gConfig.nodeID = 0x11; // test
@@ -457,6 +564,9 @@ int main( void ) {
     
     // Save Config if Changed
     SaveConfig();
+    
+    // Operation Result Indicator
+    if( gDelayedOperation > 0 ) OperationIndicator();
     
     // Enter Low Power Mode
     if( tmrIdleDuration > TIMEOUT_IDLE && !isNodeIdRequired() ) {

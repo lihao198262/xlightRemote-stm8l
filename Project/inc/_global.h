@@ -8,11 +8,11 @@
 
 // Simple Direct Test
 // Uncomment this line to work in Simple Direct Test Mode
-#define ENABLE_SDTM
+//#define ENABLE_SDTM
 
 // Config Flashlight and Laser
 // Uncomment this line if need Flashlight or Laser Pen
-//#define ENABLE_FLASHLIGHT_LASER
+#define ENABLE_FLASHLIGHT_LASER
 
 /* Exported types ------------------------------------------------------------*/
 // Common Data Type
@@ -64,6 +64,12 @@
 
 #define UNIQUE_ID_LEN           8
 #define NUM_DEVICES             2
+
+#define DELAY_OP_ERASEFLASH     0x10
+#define DELAY_OP_PAIRED         0x20
+#define DELAY_OP_CONNECTED      0x30
+#define DELAY_OP_PPTMODE_ON     0x40
+#define DELAY_OP_PPTMODE_OFF    0x50
 
 // Device (lamp) type
 typedef enum
@@ -141,6 +147,7 @@ extern Config_t gConfig;
 extern DeviceStatus_t gDevStatus[NUM_DEVICES];
 extern bool gIsChanged;
 extern uint8_t _uniqueID[UNIQUE_ID_LEN];
+extern uint8_t gDelayedOperation;
 
 #define RING_ID_ALL             0
 #define RING_ID_1               1

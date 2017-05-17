@@ -49,10 +49,8 @@ uint8_t ParseProtocol(){
         memcpy(CurrentNetworkID, msg.payload.data, sizeof(CurrentNetworkID));
         UpdateNodeAddress();
         gIsChanged = TRUE;
-        LED_Blink(TRUE, 3, TRUE);
+        gDelayedOperation = DELAY_OP_PAIRED;
         Msg_Presentation();
-        LED_Blink(TRUE, 2, FALSE);
-        LED_Blink(TRUE, 3, TRUE);
         return 1;
       }
     } else if( _type == I_CONFIG ) {
@@ -96,6 +94,7 @@ uint8_t ParseProtocol(){
           CurrentDeviceID = _type;
         }
         gIsChanged = TRUE;
+        if( gDelayedOperation != DELAY_OP_PAIRED ) gDelayedOperation = DELAY_OP_CONNECTED;
         
         // REQ device status
         Msg_RequestDeviceStatus(CurrentDeviceID);

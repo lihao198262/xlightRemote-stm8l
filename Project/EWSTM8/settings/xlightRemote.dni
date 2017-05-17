@@ -36,7 +36,7 @@ ActionState=1
 Enabled=0
 ShowSource=1
 [DebugChecksum]
-Checksum=-849820324
+Checksum=-890112944
 [CallStack]
 ShowArgs=0
 [Disassembly]
@@ -55,18 +55,14 @@ ShowTimeSum=1
 [Breakpoints]
 Bp0=_ "STD_CODE" "{$PROJ_DIR$\main.c}.230.5" 0 0 0 0 "" 0 ""
 Bp1=_ "STD_CODE" "{$PROJ_DIR$\ProtocolParser.c}.21.3" 0 0 0 0 "" 0 ""
-Bp2=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.257.5" 1 0 0 0 "" 0 ""
-Bp3=_ "STD_CODE" "{$PROJ_DIR$\..\src\ProtocolParser.c}.69.9" 1 0 0 0 "" 0 ""
-Bp4=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.319.1" 1 0 0 0 "" 0 ""
-Bp5=_ "STD_CODE" "{$PROJ_DIR$\..\src\button.c}.547.5" 1 0 0 0 "" 0 ""
-Bp6=_ "STD_CODE" "{$PROJ_DIR$\..\src\button.c}.674.5" 1 0 0 0 "" 0 ""
-Bp7=_ "STD_CODE" "{$PROJ_DIR$\..\src\button.c}.669.5" 1 0 0 0 "" 0 ""
-Bp8=_ "STD_CODE" "{$PROJ_DIR$\..\src\ProtocolParser.c}.50.9" 1 0 0 0 "" 0 ""
-Bp9=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.352.3" 1 0 0 0 "" 0 ""
-Bp10=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.443.3" 1 0 0 0 "" 0 ""
-Bp11=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.486.5" 1 0 0 0 "" 0 ""
-Bp12=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.299.3" 1 0 0 0 "" 0 ""
-Count=13
+Bp2=_ "STD_CODE" "{$PROJ_DIR$\..\src\ProtocolParser.c}.67.9" 1 0 0 0 "" 0 ""
+Bp3=_ "STD_CODE" "{$PROJ_DIR$\..\src\button.c}.562.5" 1 0 0 0 "" 0 ""
+Bp4=_ "STD_CODE" "{$PROJ_DIR$\..\src\button.c}.689.5" 1 0 0 0 "" 0 ""
+Bp5=_ "STD_CODE" "{$PROJ_DIR$\..\src\button.c}.684.5" 1 0 0 0 "" 0 ""
+Bp6=_ "STD_CODE" "{$PROJ_DIR$\..\src\ProtocolParser.c}.50.9" 1 0 0 0 "" 0 ""
+Bp7=_ "STD_CODE" "{$PROJ_DIR$\..\src\main.c}.254.5" 1 0 0 0 "" 0 ""
+Bp8=_ "STD_CODE" "{$PROJ_DIR$\..\src\ProtocolParser.c}.97.9" 1 0 0 0 "" 0 ""
+Count=9
 [Log file]
 LoggingEnabled=_ 0
 LogFile=_ ""
