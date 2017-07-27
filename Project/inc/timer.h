@@ -18,6 +18,10 @@
 // Idle duration before enter low power mode
 #define TIMEOUT_IDLE            1500            // The unit is 10 ms, so the duration is 15 s.
 
+typedef void (*TM4_CallBack_t)();
+
+extern TM4_CallBack_t TIM4_10ms_handler;
+
 extern u16 tmrIdleDuration;
 
 // Timer function pointers

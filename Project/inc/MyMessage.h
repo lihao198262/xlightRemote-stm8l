@@ -29,6 +29,7 @@
 *  NRF24L01 Driver Defaults
 ***********************************/
 typedef enum { RF24_PA_MIN = 0,RF24_PA_LOW, RF24_PA_HIGH, RF24_PA_MAX, RF24_PA_ERROR } rf24_pa_dbm_e ;
+typedef enum { RF24_1MBPS = 0, RF24_2MBPS, RF24_250KBPS } rf24_datarate_e;
 
 #define RF24_CE_PIN		   		A0
 #define RF24_CS_PIN		   	 	A2
@@ -95,6 +96,8 @@ typedef enum {
 	S_SOUND, // Sound sensor, V_TRIPPED, V_ARMED, V_LEVEL (sound level in dB)
 	S_VIBRATION, // Vibration sensor, V_TRIPPED, V_ARMED, V_LEVEL (vibration in Hz)
 	S_MOISTURE, // Moisture sensor, V_TRIPPED, V_ARMED, V_LEVEL (water content or moisture in percentage?)
+        S_ZENSENSOR = 65, // Xlight Super Sensor
+        S_ZENREMOTE = 66, // Xlight Super Remote
 } mysensor_sensor;
 
 // Type of sensor data (for set/req/ack messages)
@@ -153,6 +156,9 @@ typedef enum {
 	V_HVAC_SETPOINT_COOL, // S_HVAC. HVAC cool setpoint (Integer between 0-100)
 	V_HVAC_SETPOINT_HEAT, // S_HEATER, S_HVAC. HVAC/Heater setpoint (Integer between 0-100)
 	V_HVAC_FLOW_MODE, // S_HVAC. Flow mode for HVAC ("Auto", "ContinuousOn", "PeriodicOn")
+        
+        V_RELAY_ON = 65,        // Xlight relay on
+        V_RELAY_OFF,            // Xlight relay off
 
 } mysensor_data;
 
@@ -217,26 +223,47 @@ typedef enum {
 
 
 // internal access for special fields
-#define miSetCommand(_command) BF_SET(msg.header.command_ack_payload, _command, 0, 3)
-#define miGetCommand() BF_GET(msg.header.command_ack_payload, 0, 3)
+#define miSetCommand(_command) BF_SET(rcvMsg.header.command_ack_payload, _command, 0, 3)
+#define miGetCommand() BF_GET(rcvMsg.header.command_ack_payload, 0, 3)
 
-#define miSetLength(_length) BF_SET(msg.header.version_length, _length, 3, 5)
-#define miGetLength() BF_GET(msg.header.version_length, 3, 5)
+#define miSetLength(_length) BF_SET(rcvMsg.header.version_length, _length, 3, 5)
+#define miGetLength() BF_GET(rcvMsg.header.version_length, 3, 5)
 
-#define miSetRequestAck(_rack) BF_SET(msg.header.command_ack_payload, _rack, 3, 1)
-#define miGetRequestAck() BF_GET(msg.header.command_ack_payload, 3, 1)
+#define miSetRequestAck(_rack) BF_SET(rcvMsg.header.command_ack_payload, _rack, 3, 1)
+#define miGetRequestAck() BF_GET(rcvMsg.header.command_ack_payload, 3, 1)
 
-#define miSetAck(_ack) BF_SET(msg.header.command_ack_payload, _ack, 4, 1)
-#define miGetAck() BF_GET(msg.header.command_ack_payload, 4, 1)
+#define miSetAck(_ack) BF_SET(rcvMsg.header.command_ack_payload, _ack, 4, 1)
+#define miGetAck() BF_GET(rcvMsg.header.command_ack_payload, 4, 1)
 
-#define miSetPayloadType(_pt) BF_SET(msg.header.command_ack_payload, _pt, 5, 3)
-#define miGetPayloadType() BF_GET(msg.header.command_ack_payload, 5, 3)
+#define miSetPayloadType(_pt) BF_SET(rcvMsg.header.command_ack_payload, _pt, 5, 3)
+#define miGetPayloadType() BF_GET(rcvMsg.header.command_ack_payload, 5, 3)
 
-#define miSetVersion(_version) BF_SET(msg.header.version_length, _version, 0, 2)
-#define miGetVersion() BF_GET(msg.header.version_length, 0, 2)
+#define miSetVersion(_version) BF_SET(rcvMsg.header.version_length, _version, 0, 2)
+#define miGetVersion() BF_GET(rcvMsg.header.version_length, 0, 2)
 
-#define miSetSigned(_signed) BF_SET(msg.header.version_length, _signed, 2, 1)
-#define miGetSigned() BF_GET(msg.header.version_length, 2, 1)
+#define miSetSigned(_signed) BF_SET(rcvMsg.header.version_length, _signed, 2, 1)
+#define miGetSigned() BF_GET(rcvMsg.header.version_length, 2, 1)
+
+#define moSetCommand(_command) BF_SET(sndMsg.header.command_ack_payload, _command, 0, 3)
+#define moGetCommand() BF_GET(sndMsg.header.command_ack_payload, 0, 3)
+
+#define moSetLength(_length) BF_SET(sndMsg.header.version_length, _length, 3, 5)
+#define moGetLength() BF_GET(sndMsg.header.version_length, 3, 5)
+
+#define moSetRequestAck(_rack) BF_SET(sndMsg.header.command_ack_payload, _rack, 3, 1)
+#define moGetRequestAck() BF_GET(sndMsg.header.command_ack_payload, 3, 1)
+
+#define moSetAck(_ack) BF_SET(sndMsg.header.command_ack_payload, _ack, 4, 1)
+#define moGetAck() BF_GET(sndMsg.header.command_ack_payload, 4, 1)
+
+#define moSetPayloadType(_pt) BF_SET(sndMsg.header.command_ack_payload, _pt, 5, 3)
+#define moGetPayloadType() BF_GET(sndMsg.header.command_ack_payload, 5, 3)
+
+#define moSetVersion(_version) BF_SET(sndMsg.header.version_length, _version, 0, 2)
+#define moGetVersion() BF_GET(sndMsg.header.version_length, 0, 2)
+
+#define moSetSigned(_signed) BF_SET(sndMsg.header.version_length, _signed, 2, 1)
+#define moGetSigned() BF_GET(sndMsg.header.version_length, 2, 1)
 
 typedef struct
 {
@@ -282,7 +309,8 @@ typedef struct
 	MyMsgPayload_t payload;
 } MyMessage_t;
 
-extern MyMessage_t msg;
-extern uint8_t *pMsg;
+extern MyMessage_t sndMsg, rcvMsg;
+extern uint8_t *psndMsg;
+extern uint8_t *prcvMsg;
 
 #endif

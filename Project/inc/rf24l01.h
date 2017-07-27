@@ -1,7 +1,11 @@
 #ifndef RF24L01_H
 #define RF24L01_H
 
+#include "_global.h"
 #include <stm8l15x.h> //Required for the stdint typedefs
+
+#define ADDRESS_WIDTH                   5
+#define PLOAD_WIDTH                     32
 
 #define RF24L01_reg_CONFIG      0x00
 #define RF24L01_reg_EN_AA       0x01
@@ -43,8 +47,14 @@
 #define RF24L01_command_W_TX_PAYLOAD_NOACK    0x58
 #define RF24L01_command_NOP                   0xFF
 
+#ifdef PCB_10_BUTTONS
 #define CSN_LOW         GPIO_ResetBits(GPIOD, GPIO_Pin_4)
 #define CSN_HIGH        GPIO_SetBits(GPIOD, GPIO_Pin_4)
+#else
+#define CSN_LOW         GPIO_ResetBits(GPIOC, GPIO_Pin_6)
+#define CSN_HIGH        GPIO_SetBits(GPIOC, GPIO_Pin_6)
+#endif
+
 #define CE_LOW          GPIO_ResetBits(GPIOB, GPIO_Pin_4)
 #define CE_HIGH         GPIO_SetBits(GPIOB, GPIO_Pin_4)
 #define SCK_LOW         GPIO_ResetBits(GPIOB, GPIO_Pin_5)
@@ -195,7 +205,7 @@ void RF24L01_init(void);
 void RF24L01_DeInit(void);
 void NRF2401_EnableIRQ(void);
 bool NRF24L01_Check(void);
-void RF24L01_setup(uint8_t *tx_addr, uint8_t *rx_addr, uint8_t channel, uint8_t boardcast);
+void RF24L01_setup(uint8_t channel, uint8_t datarate, uint8_t powerlevel, uint8_t boardcast);
 void RF24L01_set_mode_TX(void);
 void RF24L01_set_mode_RX(void);
 uint8_t RF24L01_was_data_sent(void);
@@ -209,4 +219,6 @@ void RF24L01_clear_interrupts(void);
 uint8_t SPI_RW(uint8_t byte);
 //void RF24L01_show_registers(void);
 
+extern uint8_t rx_addr[ADDRESS_WIDTH];
+extern uint8_t tx_addr[ADDRESS_WIDTH];
 #endif

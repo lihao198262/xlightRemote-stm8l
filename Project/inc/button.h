@@ -1,19 +1,37 @@
 #ifndef BUTTON_H_
 #define BUTTON_H_
 
+// Default Hue for Fn
+#define BTN_FN1_BR              90
+#define BTN_FN1_CCT             3000
+
+#define BTN_FN2_BR              20
+#define BTN_FN2_CCT             3500
+
+#define BTN_FN3_BR              75
+#define BTN_FN3_CCT             5000
+#define BTN_FN3_W               0
+#define BTN_FN3_R               230
+#define BTN_FN3_G               32  
+#define BTN_FN3_B               80
+
+#define BTN_FN4_BR              85
+#define BTN_FN4_CCT             6000
+
 // Key list
 typedef enum
 {
-    keylstLeft,
-    keylstRight,
     keylstUp,
     keylstDown,
+    keylstLeft,
+    keylstRight,
     keylstCenter,
     keylstFn1,
     keylstFn2,
     keylstFn3,
     keylstFn4,
     keylstFLASH,
+    keylstLASER,
     keylstDummy
 } keylist_t;
 

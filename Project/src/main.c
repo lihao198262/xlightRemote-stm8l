@@ -23,18 +23,13 @@ MISO   IRQ
 
 Connections:
   PB4 -> CE
-  PD4 -> CSN
+  PD4 -> CSN (10 buttons), PC6 -> CSN (11 buttons)
   PB5 -> SCK
   PB6 -> MOSI
   PB7 -> MISO
   PD5 -> IRQ
 
 */
-
-// Xlight Application Identification
-#define XLA_VERSION               0x03
-#define XLA_ORGANIZATION          "xlight.ca"               // Default value. Read from EEPROM
-#define XLA_PRODUCT_NAME          "XRemote"                 // Default value. Read from EEPROM
 
 // RF channel for the sensor net, 0-127
 #define RF24_CHANNEL	   		71
@@ -47,25 +42,38 @@ Connections:
 #define WWDG_COUNTER                    0x7f
 #define WWDG_WINDOW                     0x77
 
+#define MAX_RF_FAILED_TIME              3      // Reset RF module when reach max failed times of sending
+
 // Unique ID for STM8L151x4
-#define     UNIQUE_ID_ADDRESS         (0x4926)
+#define     UNIQUE_ID_ADDRESS           (0x4926)
+
+// Timeout
+#define RTE_TM_CONFIG_MODE              12000  // timeout in config mode, about 120s (12000 * 10ms)
 
 const UC RF24_BASE_RADIO_ID[ADDRESS_WIDTH] = {0x00,0x54,0x49,0x54,0x44};
 
 // Public variables
 Config_t gConfig;
 DeviceStatus_t gDevStatus[NUM_DEVICES];
-MyMessage_t msg;
-uint8_t *pMsg = (uint8_t *)&msg;
+MyMessage_t sndMsg, rcvMsg;
+uint8_t *psndMsg = (uint8_t *)&sndMsg;
+uint8_t *prcvMsg = (uint8_t *)&rcvMsg;
 bool gIsChanged = FALSE;
+bool gResetRF = FALSE;
+bool gResetNode = FALSE;
+
 uint8_t gDelayedOperation = 0;
 uint8_t _uniqueID[UNIQUE_ID_LEN];
+uint8_t m_cntRFSendFailed = 0;
+uint8_t gSendScenario = 0;
+uint8_t gSendDelayTick = 0;
 
 // Moudle variables
 bool bPowerOn = FALSE;
 uint8_t mutex;
-uint8_t rx_addr[ADDRESS_WIDTH];
-uint8_t tx_addr[ADDRESS_WIDTH];
+uint8_t oldCurrentDevID = 0;
+uint16_t configMode_tick = 0;
+void tmrProcess();
 
 bool isIdentityEmpty(const UC *pId, UC nLen)
 {
@@ -81,8 +89,14 @@ bool isIdentityEqual(const UC *pId1, const UC *pId2, UC nLen)
 
 bool isNodeIdRequired()
 {
+#ifndef ENABLE_SDTM
+  if( gConfig.enSDTM ) return FALSE;
+  
   return( (IS_NOT_REMOTE_NODEID(CurrentNodeID) && !IS_GROUP_NODEID(CurrentNodeID)) || 
          isIdentityEmpty(CurrentNetworkID, ADDRESS_WIDTH) || isIdentityEqual(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH) );
+#else
+  return FALSE;
+#endif  
 }
 
 static void clock_init(void)
@@ -122,11 +136,11 @@ void GPIO_LowPower_Config(void)
   GPIO_Init(GPIOA, GPIO_Pin_2|GPIO_Pin_4, GPIO_Mode_In_FL_No_IT);
   GPIO_Init(GPIOA, GPIO_Pin_3|GPIO_Pin_5|GPIO_Pin_6|GPIO_Pin_7, GPIO_Mode_Out_PP_Low_Slow);
 
-#ifdef ENABLE_FLASHLIGHT_LASER
-  GPIO_Init(GPIOC, GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_4|GPIO_Pin_5|GPIO_Pin_6, GPIO_Mode_Out_PP_Low_Slow);
-#else  
+//#ifdef ENABLE_FLASHLIGHT_LASER
+//  GPIO_Init(GPIOC, GPIO_Pin_2|GPIO_Pin_3|GPIO_Pin_4|GPIO_Pin_5|GPIO_Pin_6, GPIO_Mode_Out_PP_Low_Slow);
+//#else  
   GPIO_Init(GPIOC, GPIO_Pin_All, GPIO_Mode_Out_PP_Low_Slow);
-#endif
+//#endif
   
   //GPIO_Init(GPIOD, GPIO_Pin_0|GPIO_Pin_1|GPIO_Pin_2|GPIO_Pin_3, GPIO_Mode_In_FL_No_IT);
   //GPIO_Init(GPIOB, GPIO_Pin_0, GPIO_Mode_In_FL_No_IT);
@@ -253,18 +267,21 @@ void LoadConfig()
     Flash_ReadBuf(FLASH_DATA_EEPROM_START_PHYSICAL_ADDRESS, (uint8_t *)&gConfig, sizeof(gConfig));
     if( gConfig.version > XLA_VERSION || gConfig.indDevice >= NUM_DEVICES 
           || !IS_VALID_REMOTE(gConfig.type) || isNodeIdRequired()
-          || gConfig.rfPowerLevel > RF24_PA_MAX 
-          || strcmp(gConfig.Organization, XLA_ORGANIZATION) != 0 ) {
+            || gConfig.rfPowerLevel > RF24_PA_MAX ) {
+          //|| strcmp(gConfig.Organization, XLA_ORGANIZATION) != 0 ) {
       memset(&gConfig, 0x00, sizeof(gConfig));
       gConfig.version = XLA_VERSION;
       gConfig.indDevice = 0;
       gConfig.present = 0;
       gConfig.inPresentation = 0;
+      gConfig.enSDTM = 0;
+      gConfig.rptTimes = 1;
       gConfig.type = remotetypRFStandard;
-      gConfig.rfPowerLevel = RF24_PA_MAX;
-      memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
-      sprintf(gConfig.Organization, "%s", XLA_ORGANIZATION);
-      sprintf(gConfig.ProductName, "%s", XLA_PRODUCT_NAME);
+      gConfig.rfChannel = RF24_CHANNEL;
+      gConfig.rfPowerLevel = RF24_PA_LOW;
+      gConfig.rfDataRate = RF24_1MBPS;      memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
+      //sprintf(gConfig.Organization, "%s", XLA_ORGANIZATION);
+      //sprintf(gConfig.ProductName, "%s", XLA_PRODUCT_NAME);
 
       // Set device info
       NodeID(0) = BASESERVICE_ADDRESS;       // NODEID_MIN_REMOTE; BASESERVICE_ADDRESS; NODEID_DUMMY
@@ -274,45 +291,148 @@ void LoadConfig()
       gConfig.devItem[2] = gConfig.devItem[0];
       gConfig.devItem[3] = gConfig.devItem[0];
       
-      // Fn Scenario
-      gConfig.fnScenario[0] = 0;
-      gConfig.fnScenario[1] = 0;
-      gConfig.fnScenario[2] = 0;
-      gConfig.fnScenario[3] = 0;
-    
+      gConfig.fnScenario[0].hue.State = DEVICE_SW_ON;
+      gConfig.fnScenario[0].hue.bmRing = 0;
+      gConfig.fnScenario[0].hue.BR = BTN_FN1_BR;
+      gConfig.fnScenario[0].hue.CCT = BTN_FN1_CCT;
+
+      gConfig.fnScenario[1].hue.State = DEVICE_SW_ON;
+      gConfig.fnScenario[1].hue.bmRing = 0;
+      gConfig.fnScenario[1].hue.BR = BTN_FN2_BR;
+      gConfig.fnScenario[1].hue.CCT = BTN_FN2_CCT;
+
+      gConfig.fnScenario[2].hue.State = DEVICE_SW_ON;
+      gConfig.fnScenario[2].hue.bmRing = 0;
+      gConfig.fnScenario[2].hue.BR = BTN_FN3_BR;
+      gConfig.fnScenario[2].hue.CCT = BTN_FN3_W;
+      gConfig.fnScenario[2].hue.R = BTN_FN3_R;
+      gConfig.fnScenario[2].hue.G = BTN_FN3_G;
+      gConfig.fnScenario[2].hue.B = BTN_FN3_B;
+
+      gConfig.fnScenario[3].hue.State = DEVICE_SW_ON;
+      gConfig.fnScenario[3].hue.bmRing = 0;
+      gConfig.fnScenario[3].hue.BR = BTN_FN4_BR;
+      gConfig.fnScenario[3].hue.CCT = BTN_FN4_CCT;
+      
       gIsChanged = TRUE;
       SaveConfig();
     }
-    // Test for CR05
-    //CurrentDeviceID = 255;
-    //gConfig.fnScenario[0] = 2;
-    //gConfig.fnScenario[1] = 3;
-    //gConfig.fnScenario[2] = 1;
+    
+    // Session time parameters
+    gConfig.indDevice = 0;
+    gConfig.inConfigMode = 0;
+    gConfig.inPresentation = 0;
+    oldCurrentDevID = gConfig.indDevice;
+    
+    /*
+    gConfig.relayKey.deviceID = 129;
+    gConfig.relayKey.subDevID = 4;
+    gConfig.relayKey.keys[0] = '1';
+    gConfig.relayKey.keys[1] = 0;
+    gConfig.relayKey.state = 0;
+    
+     // Set Devices
+    gConfig.devItem[0].deviceID = 255;
+    gConfig.devItem[0].subDevID = 0;
+    gConfig.devItem[1] = gConfig.devItem[0];
+    gConfig.devItem[2] = gConfig.devItem[0];
+    gConfig.devItem[3] = gConfig.devItem[0];
+    gConfig.devItem[1].deviceID = 255;
+    gConfig.devItem[1].subDevID = 1;
+    gConfig.devItem[2].deviceID = 255;
+    gConfig.devItem[2].subDevID = 2;
+    
+    // Set Fn
+    /// F1
+    gConfig.fnScenario[0].bmDevice = 0x04;
+    gConfig.fnScenario[0].scenario = 65;
+    gConfig.fnScenario[0].hue.State = 2;
+    gConfig.fnScenario[0].hue.bmRing = 0;
+    /// F2
+    gConfig.fnScenario[1].bmDevice = 0x02;
+    gConfig.fnScenario[1].scenario = 66;
+    gConfig.fnScenario[1].hue.State = 2;
+    gConfig.fnScenario[1].hue.bmRing = 0;
+    /// F3
+    gConfig.fnScenario[2].bmDevice = 0x01;
+    gConfig.fnScenario[2].scenario = 67;
+    gConfig.fnScenario[2].hue.State = 1;
+    gConfig.fnScenario[2].hue.bmRing = 0;
+    gConfig.fnScenario[2].hue.BR = 90;
+    gConfig.fnScenario[2].hue.CCT = 5500;
+    /// F4
+    gConfig.fnScenario[3].bmDevice = 0x01;
+    gConfig.fnScenario[3].scenario = 68;
+    gConfig.fnScenario[3].hue.State = 0;    
+    gConfig.fnScenario[3].hue.bmRing = 0;
+    */
 }
 
-void UpdateNodeAddress() {
+void UpdateNodeAddress(uint8_t _tx) {
   memcpy(rx_addr, CurrentNetworkID, ADDRESS_WIDTH);
   rx_addr[0] = CurrentNodeID;
   memcpy(tx_addr, CurrentNetworkID, ADDRESS_WIDTH);
+  
+  if( _tx == NODEID_RF_SCANNER ) {
+    tx_addr[0] = NODEID_RF_SCANNER;
+  } else {  
 #ifdef ENABLE_SDTM
-  tx_addr[0] = CurrentDeviceID;
+    tx_addr[0] = CurrentDeviceID;
 #else
-  tx_addr[0] = (isNodeIdRequired() ? BASESERVICE_ADDRESS : NODEID_GATEWAY);
-#endif  
-  RF24L01_setup(tx_addr, rx_addr, RF24_CHANNEL, BROADCAST_ADDRESS);     // With openning the boardcast pipe
+    if( gConfig.enSDTM ) {
+      tx_addr[0] = CurrentDeviceID;
+    } else {
+      tx_addr[0] = (isNodeIdRequired() ? BASESERVICE_ADDRESS : NODEID_GATEWAY);
+    }
+#endif
+  }
+  RF24L01_setup(gConfig.rfChannel, gConfig.rfDataRate, gConfig.rfPowerLevel, BROADCAST_ADDRESS);     // With openning the boardcast pipe
 }  
 
+bool NeedUpdateRFAddress(uint8_t _dest) {
+  bool rc = FALSE;
+  if( sndMsg.header.destination == NODEID_RF_SCANNER && tx_addr[0] != NODEID_RF_SCANNER ) {
+    UpdateNodeAddress(NODEID_RF_SCANNER);
+    rc = TRUE;
+  } else if( sndMsg.header.destination != NODEID_RF_SCANNER && tx_addr[0] != NODEID_GATEWAY ) {
+    UpdateNodeAddress(NODEID_GATEWAY);
+    rc = TRUE;
+  }
+  return rc;
+}
+
 void EraseCurrentDeviceInfo() {
-#ifndef ENABLE_SDTM  
+#ifndef ENABLE_SDTM
   gDelayedOperation = DELAY_OP_ERASEFLASH;
   CurrentNodeID = BASESERVICE_ADDRESS;
   CurrentDeviceID = NODEID_MAINDEVICE;
   CurrentDeviceType = devtypMRing3;
   CurrentDevicePresent = 0;
+  gConfig.enSDTM = 0;
   memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
   gIsChanged = TRUE;
   SaveConfig();
 #endif
+}
+
+void ToggleSDTM() {
+#ifndef ENABLE_SDTM  
+  gConfig.enSDTM = 1 - gConfig.enSDTM;
+  gIsChanged = TRUE;
+  SaveConfig();
+  // Soft reset
+  WWDG->CR = 0x80;
+#endif  
+}
+
+void SetConfigMode(bool _sw, uint8_t _devIndex) {
+  configMode_tick = 0;
+  if( !gConfig.inConfigMode ) oldCurrentDevID = gConfig.indDevice;
+  gConfig.inConfigMode = _sw;
+  
+  // May use ChangeCurrentDevice() later
+  if( _devIndex == 255 ) gConfig.indDevice = oldCurrentDevID;
+  else if( _devIndex < NUM_DEVICES ) gConfig.indDevice = _devIndex;
 }
 
 bool WaitMutex(uint32_t _timeout) {
@@ -322,18 +442,56 @@ bool WaitMutex(uint32_t _timeout) {
   return FALSE;
 }
 
+// reset rf
+void ResetRFModule()
+{
+  if(gResetRF)
+  {
+    RF24L01_init();
+    NRF2401_EnableIRQ();
+    UpdateNodeAddress(NODEID_GATEWAY);
+    gResetRF=FALSE;
+  }
+}
+
+
 // Send message and switch back to receive mode
 bool SendMyMessage() {
   if( bMsgReady ) {
-    mutex = 0;
-    RF24L01_set_mode_TX();
-    RF24L01_write_payload(pMsg, PLOAD_WIDTH);
+    
+    // Change tx destination if necessary
+    NeedUpdateRFAddress(sndMsg.header.destination);
+    
+    uint8_t lv_tried = 0;
+    uint16_t delay;
+    while (lv_tried++ <= gConfig.rptTimes ) {
+      mutex = 0;
+      RF24L01_set_mode_TX();
+      RF24L01_write_payload(psndMsg, PLOAD_WIDTH);
 
-    WaitMutex(0x1FFFF);
-    if (mutex != 1) {
+      WaitMutex(0x1FFFF);
+      if (mutex == 1) {
+        m_cntRFSendFailed = 0;
+        break; // sent sccessfully
+      } else if( m_cntRFSendFailed++ > MAX_RF_FAILED_TIME ) {
+        // Reset RF module
+        m_cntRFSendFailed = 0;
+        // RF24 Chip in low power
+        RF24L01_DeInit();
+        delay = 0x1FFF;
+        while(delay--)feed_wwdg();
+        RF24L01_init();
+        NRF2401_EnableIRQ();
+        UpdateNodeAddress(NODEID_GATEWAY);
+        continue;
+      }
+      
       //The transmission failed, Notes: mutex == 2 doesn't mean failed
       //It happens when rx address defers from tx address
       //asm("nop"); //Place a breakpoint here to see memory
+      // Repeat the message if necessary
+      uint16_t delay = 0xFFF;
+      while(delay--)feed_wwdg();
     }
     
     // Switch back to receive mode
@@ -346,8 +504,14 @@ bool SendMyMessage() {
 
 bool SayHelloToDevice(bool infinate) {
   uint8_t _count = 0;
-  UpdateNodeAddress();
+  UpdateNodeAddress(NODEID_GATEWAY);
   while(1) {
+    ////////////rfscanner process///////////////////////////////
+    ProcessOutputCfgMsg(); 
+    SendMyMessage();
+    ResetRFModule();
+    SaveConfig();
+    ////////////rfscanner process/////////////////////////////// 
     if( _count++ == 0 ) {
       if( isNodeIdRequired() ) {
         Msg_RequestNodeID();
@@ -378,12 +542,12 @@ uint8_t ChangeCurrentDevice(uint8_t _newDev) {
   if( currentDev != _newDev ) {
     SelectDeviceLED(_newDev);
     gConfig.indDevice = _newDev;
-    UpdateNodeAddress();
+    UpdateNodeAddress(NODEID_GATEWAY);
     if( !SayHelloToDevice(FALSE) ) {
       // Switch back to prevoius device
       SelectDeviceLED(currentDev);
       gConfig.indDevice = currentDev;
-      UpdateNodeAddress();
+      UpdateNodeAddress(NODEID_GATEWAY);
     }
   }
   
@@ -527,13 +691,6 @@ int main( void ) {
   LED_Blink(TRUE, FALSE);
   LED_Blink(TRUE, FALSE);
  
-  // Update RF addresses and Setup RF environment
-  //gConfig.nodeID = 0x11; // test
-  //gConfig.nodeID = NODEID_MIN_REMOTE;   // test
-  //gConfig.nodeID = BASESERVICE_ADDRESS;   // test
-  //memcpy(gConfig.NetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH); // test
-  //UpdateNodeAddress();
-
   // NRF_IRQ
   NRF2401_EnableIRQ();
 
@@ -543,9 +700,17 @@ int main( void ) {
   CurrentNodeID = NODEID_MIN_REMOTE;
   CurrentDeviceID = BASESERVICE_ADDRESS;
   memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
-  UpdateNodeAddress();
-#else  
-  SayHelloToDevice(TRUE);
+  UpdateNodeAddress(NODEID_GATEWAY);
+#else
+  if( gConfig.enSDTM ) {
+    gConfig.indDevice = 0;
+    CurrentNodeID = NODEID_MIN_REMOTE;
+    CurrentDeviceID = BASESERVICE_ADDRESS;
+    memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
+    UpdateNodeAddress(NODEID_GATEWAY);
+  } else {
+    SayHelloToDevice(TRUE);
+  }
 #endif
 
   // Init Watchdog
@@ -553,11 +718,23 @@ int main( void ) {
   
   // Set PowerOn flag
   bPowerOn = TRUE;
-
+  TIM4_10ms_handler = tmrProcess;
+  
   while (1) {
     
     // Feed the Watchdog
     feed_wwdg();
+    
+    ////////////rfscanner process///////////////////////////////
+    ProcessOutputCfgMsg(); 
+    // reset rf
+    ResetRFModule();
+    if(gResetNode)
+    {
+      gResetNode = FALSE;
+      break;     
+    }
+    ////////////rfscanner process/////////////////////////////// 
     
     // Send message if ready
     SendMyMessage();
@@ -569,7 +746,7 @@ int main( void ) {
     if( gDelayedOperation > 0 ) OperationIndicator();
     
     // Enter Low Power Mode
-    if( tmrIdleDuration > TIMEOUT_IDLE && !isNodeIdRequired() ) {
+    if( tmrIdleDuration > TIMEOUT_IDLE && !isNodeIdRequired() && !gConfig.inConfigMode ) {
       tmrIdleDuration = 0;
       lowpower_config();
       bPowerOn = FALSE;
@@ -580,9 +757,34 @@ int main( void ) {
       wakeup_config();
       // REQ device status
       //delay_ms(10);
-      //Msg_RequestDeviceStatus(CurrentDeviceID);
+      //Msg_RequestDeviceStatus();
     }
   }
+}
+
+// Execute timer operations
+void tmrProcess() {
+  if( gConfig.inConfigMode ) {
+    if( configMode_tick++ > RTE_TM_CONFIG_MODE ) {
+      SetConfigMode(FALSE, oldCurrentDevID);
+    }
+  }
+  
+  if( gSendScenario > 0 ) {
+    gSendDelayTick++;
+    if( gSendDelayTick > 5 && !bMsgReady ) {
+      Msg_DevScenario(gSendScenario);
+      gSendScenario = 0;
+      gSendDelayTick = 0;
+    }
+  }
+  
+    ////////////rfscanner process///////////////////////////////
+    ProcessOutputCfgMsg(); 
+    // Save Config if Changed
+    SendMyMessage();
+    SaveConfig();
+    ////////////rfscanner process///////////////////////////////
 }
 
 void RF24L01_IRQ_Handler() {
@@ -590,7 +792,7 @@ void RF24L01_IRQ_Handler() {
   if(RF24L01_is_data_available()) {
     //Packet was received
     RF24L01_clear_interrupts();
-    RF24L01_read_payload(pMsg, PLOAD_WIDTH);
+    RF24L01_read_payload(prcvMsg, PLOAD_WIDTH);
     bMsgReady = ParseProtocol();
     return;
   }

@@ -10,9 +10,16 @@
 // Uncomment this line to work in Simple Direct Test Mode
 //#define ENABLE_SDTM
 
+// Button Layout
+// Uncomment this line if PCB has 10 buttons
+//#define PCB_10_BUTTONS
+
 // Config Flashlight and Laser
 // Uncomment this line if need Flashlight or Laser Pen
-#define ENABLE_FLASHLIGHT_LASER
+//#define ENABLE_FLASHLIGHT_LASER
+
+// Uncomment this line if need Presentation Mode
+//#define ENABLE_PRESENTATION_MODE
 
 /* Exported types ------------------------------------------------------------*/
 // Common Data Type
@@ -49,9 +56,12 @@
 #define NODEID_MIN_REMOTE       64
 #define NODEID_MAX_REMOTE       127
 #define NODEID_PROJECTOR        128
+#define NODEID_KEYSIMULATOR     129
+#define NODEID_SUPERSENSOR      130
 #define NODEID_SMARTPHONE       139
 #define NODEID_MIN_GROUP        192
 #define NODEID_MAX_GROUP        223
+#define NODEID_RF_SCANNER       250
 #define NODEID_DUMMY            255
 #define BASESERVICE_ADDRESS     0xFE
 #define BROADCAST_ADDRESS       0xFF
@@ -63,7 +73,8 @@
 #define CT_STEP                 ((CT_MAX_VALUE-CT_MIN_VALUE)/10)
 
 #define UNIQUE_ID_LEN           8
-#define NUM_DEVICES             2
+#define NUM_DEVICES             4
+#define NUM_RELAY_KEYS          4
 
 #define DELAY_OP_ERASEFLASH     0x10
 #define DELAY_OP_PAIRED         0x20
@@ -75,33 +86,73 @@
 typedef enum
 {
   devtypUnknown = 0,
-  devtypCRing3,     // Color ring - Rainbow
+  // Color ring - Rainbow
+  devtypCRing3,
   devtypCRing2,
-  devtypCRing1,
-  devtypWRing3,     // White ring - Sunny
+  devtypCBar,
+  devtypCFrame,
+  devtypCWave,
+  devtypCRing1 = 31,
+
+  // White ring - Sunny
+  devtypWRing3 = 32,
   devtypWRing2,
-  devtypWRing1,
-  devtypMRing3 = 8, // Color & Motion ring - Mirage
+  devtypWBar,
+  devtypWFrame,
+  devtypWWave,
+  devtypWSquare60,      // 60 * 60
+  devtypWPanel120_30,   // 120 * 30
+  devtypWBlackboard,    // Blackboard lamp
+  devtypWRing1 = 95,
+
+  // Color & Motion ring - Mirage
+  devtypMRing3 = 96,
   devtypMRing2,
-  devtypMRing1,
+  devtypMBar,
+  devtypMFrame,
+  devtypMWave,
+  devtypMRing1 = 127,
+
   devtypDummy = 255
 } devicetype_t;
-
 
 // Remote type
 typedef enum
 {
-  remotetypUnknown = 0,
+  remotetypUnknown = 224,
   remotetypRFSimply,
   remotetypRFStandard,
   remotetypRFEnhanced,
   remotetypDummy
 } remotetype_t;
 
+// Xlight Application Identification
+#define XLA_VERSION               0x08
+#define XLA_ORGANIZATION          "xlight.ca"               // Default value. Read from EEPROM
+#define XLA_PRODUCT_NAME          "XRemote"                 // Default value. Read from EEPROM
+
+
+// I_GET_NONCE sub-type
+enum {
+    SCANNER_PROBE = 0,
+    SCANNER_SETUP_RF,           // by NodeID & SubID
+    SCANNER_SETUPDEV_RF,        // by UniqueID
+    
+    SCANNER_GETCONFIG = 8,      // by NodeID & SubID
+    SCANNER_SETCONFIG,
+    SCANNER_GETDEV_CONFIG,      // by UniqueID
+    SCANNER_SETDEV_CONFIG,
+    
+    SCANNER_TEST_NODE = 16,     // by NodeID & SubID
+    SCANNER_TEST_DEVICE,        // by UniqueID
+};
+
+
 typedef struct
 {
-  UC State                    :1;           // Component state
-  UC BR                       :7;           // Brightness of white [0..100]
+  UC State                    :8;           // Component state
+  UC bmRing                   :8;           // Bitmap for rings, 0 means all rings
+  UC BR                       :8;           // Brightness of white [0..100]
   US CCT                      :16;          // CCT (warm or cold) [2700..6500]
   UC R                        :8;           // Brightness of red
   UC G                        :8;           // Brightness of green
@@ -113,9 +164,13 @@ typedef struct
 
 typedef struct
 {
+#if XLA_VERSION <= 0x07
   UC nodeID;                                // Node ID for Remote on specific controller
+  UC subID;                                 // SubID
   UC NetworkID[6];
-  UC devcieID;                              // Device Node ID
+#endif  
+  UC deviceID;                              // Device Node ID
+  UC subDevID;                              // Device SubID
   UC type;                                  // Type of Device
 } DeviceInfo_t;
 
@@ -128,26 +183,81 @@ typedef struct
 
 typedef struct
 {
+  UC bmDevice                 :4;       // Bitmap of devices, 0 means current device
+  UC scenario;                          // ScenarioID or 0 means specific Hue
+  Hue_t hue;
+} fnScenario_t;
+
+typedef struct
+{
+  UC deviceID;                              // Device Node ID
+  UC subDevID;                              // Device SubID
+  UC keys[NUM_RELAY_KEYS];
+  UC state                    :1;           // On / Off
+} RelayKeyInfo_t;
+
+#if XLA_VERSION > 0x07
+typedef struct
+{
+  // Static & status parameters
+  UC version                  :8;           // Data version, other than 0xFF
+  UC present                  :1;           // 0 - not present; 1 - present
+  UC inPresentation           :1;           // whether in presentation
+  UC inConfigMode             :1;           // whether in config mode
+  UC reserved0                :5;
+  
+  // Configurable parameters
+  UC nodeID;                                // Node ID for Remote on specific controller
+  UC subID;                                 // SubID
+  UC NetworkID[6];
+  UC rfChannel;                             // RF Channel: [0..127]
+  UC rfPowerLevel             :2;           // RF Power Level 0..3
+  UC rfDataRate               :2;           // RF Data Rate [0..2], 0 for 1Mbps, or 1 for 2Mbps, 2 for 250kbs
+  UC rptTimes                 :2;           // Sending message max repeat times [0..3]
+  UC enSDTM                   :1;           // Simple Direct Test Mode Flag
+  UC reserved1                :1;
+  UC type;                                  // Type of Remote
+  US token;                                 // Current token
+  UC indDevice                :3;           // Current Device Index: [0..3]
+  UC reserved2                :5;
+  DeviceInfo_t devItem[NUM_DEVICES];
+  fnScenario_t fnScenario[4];
+  RelayKeyInfo_t relayKey;
+} Config_t;
+#else
+typedef struct
+{
   UC version                  :8;           // Data version, other than 0xFF
   UC indDevice                :3;           // Current Device Index: [0..3]
   UC present                  :1;           // 0 - not present; 1 - present
   UC inPresentation           :1;           // whether in presentation
-  UC reserved                 :3;
+  UC inConfigMode             :1;           // whether in config mode
+  UC rfDataRate               :2;           // RF Data Rate [0..2], 0 for 1Mbps, or 1 for 2Mbps, 2 for 250kbs
   UC type;                                  // Type of Remote
   US token;                                 // Current token
-  char Organization[24];                    // Organization name
-  char ProductName[24];                     // Product name
+  //char Organization[24];                    // Organization name
+  //char ProductName[24];                     // Product name
   UC rfPowerLevel             :2;           // RF Power Level 0..3
-  UC Reserved1                :6;           // Reserved bits
+  UC enSDTM                   :1;           // Simple Direct Test Mode Flag
+  UC rptTimes                 :2;           // Sending message max repeat times [0..3]
+  UC Reserved1                :3;           // Reserved bits
+  UC rfChannel;                             // RF Channel: [0..127]
   DeviceInfo_t devItem[NUM_DEVICES];
-  UC fnScenario[4];
+  fnScenario_t fnScenario[4];
+  RelayKeyInfo_t relayKey;
 } Config_t;
+#endif
 
 extern Config_t gConfig;
 extern DeviceStatus_t gDevStatus[NUM_DEVICES];
 extern bool gIsChanged;
+extern bool gResetRF;
+extern bool gResetNode;
+
 extern uint8_t _uniqueID[UNIQUE_ID_LEN];
 extern uint8_t gDelayedOperation;
+extern uint8_t gSendScenario;
+extern uint8_t gSendDelayTick;
 
 #define RING_ID_ALL             0
 #define RING_ID_1               1
@@ -163,9 +273,18 @@ extern uint8_t gDelayedOperation;
 #define IS_NOT_DEVICE_NODEID(nID)  ((nID < NODEID_MIN_DEVCIE || nID > NODEID_MAX_DEVCIE) && nID != NODEID_MAINDEVICE)
 #define IS_NOT_REMOTE_NODEID(nID)  (nID < NODEID_MIN_REMOTE || nID > NODEID_MAX_REMOTE)
 
+#if XLA_VERSION > 0x07
+#define NodeID(x)                  gConfig.nodeID
+#define SubNID(x)                  gConfig.subID
+#define NetworkID(x)               gConfig.NetworkID
+#else
 #define NodeID(x)                  gConfig.devItem[x].nodeID
+#define SubNID(x)                  gConfig.devItem[x].subID
 #define NetworkID(x)               gConfig.devItem[x].NetworkID
-#define DeviceID(x)                gConfig.devItem[x].devcieID
+#endif
+
+#define DeviceID(x)                gConfig.devItem[x].deviceID
+#define DeviceSubID(x)             gConfig.devItem[x].subDevID
 #define DeviceType(x)              gConfig.devItem[x].type
 #define DEVST_Present(x)           gDevStatus[x].present
 #define DEVST_OnOff(x)             gDevStatus[x].ring.State
@@ -176,8 +295,10 @@ extern uint8_t gDelayedOperation;
 #define DEVST_B(x)                 gDevStatus[x].ring.B
 
 #define CurrentNodeID              NodeID(gConfig.indDevice)
+#define CurrentSubNID              SubNID(gConfig.indDevice)
 #define CurrentNetworkID           NetworkID(gConfig.indDevice)
 #define CurrentDeviceID            DeviceID(gConfig.indDevice)
+#define CurrentDevSubID            DeviceSubID(gConfig.indDevice)
 #define CurrentDeviceType          DeviceType(gConfig.indDevice)
 #define CurrentDevicePresent       DEVST_Present(gConfig.indDevice)
 #define CurrentDeviceOnOff         DEVST_OnOff(gConfig.indDevice)
@@ -187,13 +308,17 @@ extern uint8_t gDelayedOperation;
 #define CurrentDevice_G            DEVST_G(gConfig.indDevice)
 #define CurrentDevice_B            DEVST_B(gConfig.indDevice)
 
+bool isIdentityEqual(const UC *pId1, const UC *pId2, UC nLen);
 bool WaitMutex(uint32_t _timeout);
-void UpdateNodeAddress(void);
 void RF24L01_IRQ_Handler();
 uint8_t ChangeCurrentDevice(uint8_t _newDev);
-void UpdateNodeAddress();
+void UpdateNodeAddress(uint8_t _tx);
 bool SendMyMessage();
 void EraseCurrentDeviceInfo();
+void ToggleSDTM();
+void SetConfigMode(bool _sw, uint8_t _devIndex);
 bool SayHelloToDevice(bool infinate);
+
+#define IS_MINE_SUBID(nSID)        ((nSID) == 0 || ((nSID) & CurrentDevSubID))
 
 #endif /* __GLOBAL_H */
