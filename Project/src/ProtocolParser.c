@@ -105,6 +105,22 @@ void UpdateSubID(uint8_t nID) {
   }
 }
 
+void SaveFavoriteDevStatus()
+{
+#ifdef NUM_FAVORITE
+  if(gLastFavoriteIndex >= NUM_FAVORITE) return;
+  if(gLastFavoriteIndex == -1) return;
+    gConfig.favoritesDevStat[gLastFavoriteIndex].reserved = 1;
+    gConfig.favoritesDevStat[gLastFavoriteIndex].ring.BR = CurrentDeviceBright;
+    gConfig.favoritesDevStat[gLastFavoriteIndex].ring.R = CurrentDevice_R;
+    gConfig.favoritesDevStat[gLastFavoriteIndex].ring.G = CurrentDevice_G;
+    gConfig.favoritesDevStat[gLastFavoriteIndex].ring.B = CurrentDevice_B;
+    gConfig.favoritesDevStat[gLastFavoriteIndex].ring.CCT = CurrentDeviceCCT;
+    gLastFavoriteTick = MAXFAVORITE_INTERVAL;
+    gIsChanged = TRUE;
+#endif
+}
+
 uint8_t ParseProtocol(){
   if( rcvMsg.header.destination != CurrentNodeID && rcvMsg.header.destination != BROADCAST_ADDRESS ) return 0;
   
@@ -254,7 +270,7 @@ uint8_t ParseProtocol(){
         if(!IS_NOT_DEVICE_NODEID(_type) || IS_GROUP_NODEID(_type) ) {
           CurrentDeviceID = _type;
         }
-        gIsChanged = TRUE;
+        gIsStatusChanged = TRUE;
         if( gDelayedOperation != DELAY_OP_PAIRED ) gDelayedOperation = DELAY_OP_CONNECTED;
         
         // REQ device status
@@ -271,21 +287,21 @@ uint8_t ParseProtocol(){
         bool _OnOff = rcvMsg.payload.bValue;
         if( _OnOff != CurrentDeviceOnOff ) {
           UpdateCurrentDeviceOnOff(_OnOff);
-          gIsChanged = TRUE;
+          gIsStatusChanged = TRUE;
           // ToDo: change On/Off LED
         }
       } else if( _type == V_PERCENTAGE ) {
         if( rcvMsg.payload.data[1] != CurrentDeviceBright || rcvMsg.payload.data[0] != CurrentDeviceOnOff) {
           CurrentDeviceBright = rcvMsg.payload.data[1];
           UpdateCurrentDeviceOnOff(rcvMsg.payload.data[0]);
-          gIsChanged = TRUE;
+          gIsStatusChanged = TRUE;
           // ToDo: change On/Off LED
         }        
       } else if( _type == V_LEVEL ) { // CCT
         uint16_t _CCTValue = rcvMsg.payload.data[1] * 256 + rcvMsg.payload.data[0];
         if( _CCTValue != CurrentDeviceCCT ) {
           CurrentDeviceCCT = _CCTValue;
-          gIsChanged = TRUE;
+          gIsStatusChanged = TRUE;
         }
       } else if( _type == V_RGBW ) {
         if( rcvMsg.payload.data[0] ) { // Success
@@ -304,8 +320,13 @@ uint8_t ParseProtocol(){
             CurrentDevice_G = rcvMsg.payload.data[8];
             CurrentDevice_B = rcvMsg.payload.data[9];
           }
-          gIsChanged = TRUE;
+          gIsStatusChanged = TRUE;
           // ToDo: change On/Off LED
+          // save favorite device status in MAXFAVORITE_INTERVAL
+          if(gLastFavoriteTick < MAXFAVORITE_INTERVAL)
+          {
+            SaveFavoriteDevStatus();
+          }       
         }
       }
     }    
@@ -379,6 +400,28 @@ void Msg_RequestDeviceStatus() {
 void Msg_DevOnOff(uint8_t _sw) {
   SendMyMessage();
   build(CurrentDeviceID, CurrentDevSubID, C_SET, V_STATUS, 1, 0);
+  moSetLength(1);
+  moSetPayloadType(P_BYTE);
+  sndMsg.payload.bValue = _sw;
+  bMsgReady = 1;
+}
+
+void Msg_DevOnOffDelay(uint8_t _sw,uint8_t _unit,uint8_t time)
+{
+  SendMyMessage();
+  build(CurrentDeviceID, CurrentDevSubID, C_SET, V_STATUS, 1, 0);
+  moSetLength(3);
+  moSetPayloadType(P_CUSTOM);
+  sndMsg.payload.data[0] = _sw;      // State: On
+  sndMsg.payload.data[1] = _unit;                
+  sndMsg.payload.data[2] = time;
+  bMsgReady = 1;
+}
+
+// Set device 1:On; 0:Off; 2:toggle
+void Msg_SpecialDevOnOff(uint8_t nodeid,uint8_t subid,uint8_t _sw) {
+  SendMyMessage();
+  build(nodeid, subid, C_SET, V_STATUS, 1, 0);
   moSetLength(1);
   moSetPayloadType(P_BYTE);
   sndMsg.payload.bValue = _sw;
@@ -469,6 +512,16 @@ void Msg_DevScenario(uint8_t _scenario) {
   bMsgReady = 1;
 }
 
+// Change special effect on current device
+void Msg_DevSpecialEffect(uint8_t _effect) {
+  SendMyMessage();
+  build(CurrentDeviceID, CurrentDevSubID, C_SET, V_VAR1, 1, 0);
+  moSetLength(1);
+  moSetPayloadType(P_BYTE);
+  sndMsg.payload.bValue = _effect;
+  bMsgReady = 1;
+}
+
 // PPT Object Action
 void Msg_PPT_ObjAction(uint8_t _obj, uint8_t _action) {
   SendMyMessage();
@@ -499,7 +552,7 @@ void MsgScanner_ProbeAck() {
   sndMsg.payload.data[payl_len++] = gConfig.nodeID;
   sndMsg.payload.data[payl_len++] = gConfig.subID;
   sndMsg.payload.data[payl_len++] = gConfig.rfChannel;
-  sndMsg.payload.data[payl_len++] = gConfig.rfDataRate << 2 + gConfig.rfPowerLevel;
+  sndMsg.payload.data[payl_len++] = (gConfig.rfDataRate << 2) + gConfig.rfPowerLevel;
   memcpy(sndMsg.payload.data + payl_len, gConfig.NetworkID, sizeof(gConfig.NetworkID));
   payl_len += sizeof(gConfig.NetworkID);
   
@@ -566,6 +619,10 @@ void Process_SetDevConfig(u8 _len) {
     memcpy((void *)((uint16_t)(&gConfig) + offset),rcvMsg.payload.data+2+UNIQUE_ID_LEN,_len);
     gIsChanged = TRUE;
 }
+bool IsNodeidValid(uint8_t nodeid)
+{
+  return !(IS_NOT_REMOTE_NODEID(nodeid));
+}
 //////set rf /////////////////////////////////////////////////
 //typedef struct
 //{
@@ -581,6 +638,7 @@ void Process_SetDevConfig(u8 _len) {
 //////set rf /////////////////////////////////////////////////
 void Process_SetupRF(const UC *rfData,uint8_t rflen)
 {
+  bool bNeedChangeCfg = FALSE;
   if(rflen > 0 &&(*rfData)>=0 && (*rfData)<=127)
   {
     if(gConfig.rfChannel != (*rfData))
@@ -608,9 +666,10 @@ void Process_SetupRF(const UC *rfData,uint8_t rflen)
     } 
   }
   rfData++;
+  bool bValidNet = FALSE;
+  bool newNetwork[6] = {0};
   if(rflen > 8)
-  {
-    bool bValidNet = FALSE;
+  {  
     for(uint8_t i = 0;i<6;i++)
     {
       if(*(rfData+i) != 0)
@@ -619,26 +678,50 @@ void Process_SetupRF(const UC *rfData,uint8_t rflen)
         break;
       }
     }
-    if(!isIdentityEqual(rfData,gConfig.NetworkID,sizeof(gConfig.NetworkID))&&bValidNet)
+    if(isIdentityEqual(rfData,gConfig.NetworkID,sizeof(gConfig.NetworkID)))
     {
-      memcpy(gConfig.NetworkID,rfData,sizeof(gConfig.NetworkID));
-      gResetRF = TRUE;
+      bValidNet=FALSE;
+    }
+    else
+    {
+      memcpy(newNetwork,rfData,sizeof(newNetwork));
     }
   }
   rfData = rfData + sizeof(gConfig.NetworkID);
+  bool bNeedResetNode = FALSE;
   if(rflen > 9 && (* rfData) != 0)
+  {
     if(gConfig.nodeID != (* rfData))
     {
-      gConfig.nodeID = (* rfData);
-      gResetNode=TRUE;
+      if(IsNodeidValid(*rfData))
+      {
+        gConfig.nodeID = (* rfData);
+        bNeedResetNode = TRUE;
+      }    
     }
+  }
   rfData++; 
-  if(rflen > 10 && (* rfData) != 0)
+  if(rflen > 10)
   {
     if(gConfig.subID != (* rfData ))
     {
       gConfig.subID = (*rfData);
+      bNeedChangeCfg = TRUE;
     }
+  }
+  if(bValidNet)
+  {// nodeid is valid,allow change networkid
+    if(IsNodeidValid(gConfig.nodeID))
+    {
+      memcpy(gConfig.NetworkID,newNetwork,sizeof(gConfig.NetworkID));
+      bNeedResetNode = TRUE;
+    }
+  }
+  if(bNeedResetNode)
+    gResetNode = TRUE;
+  if(gResetNode || gResetRF || bNeedChangeCfg)
+  {
+    gIsChanged = TRUE;
   }
 }
 //----------------------------------------------

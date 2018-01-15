@@ -31,8 +31,21 @@ Connections:
 
 */
 
+#ifdef TEST
+void testio()
+{
+  GPIO_Init(GPIOC , GPIO_Pin_1 , GPIO_Mode_Out_PP_Low_Slow);
+  GPIO_Init(GPIOC , GPIO_Pin_3 , GPIO_Mode_Out_PP_Low_Slow);
+  GPIO_Init(GPIOC , GPIO_Pin_5 , GPIO_Mode_Out_PP_Low_Slow);
+}
+#endif
+
+// Starting Flash block number of backup config
+#define BACKUP_CONFIG_BLOCK_NUM         2
+#define BACKUP_CONFIG_ADDRESS           (FLASH_DATA_EEPROM_START_PHYSICAL_ADDRESS + BACKUP_CONFIG_BLOCK_NUM * FLASH_BLOCK_SIZE)
+
 // RF channel for the sensor net, 0-127
-#define RF24_CHANNEL	   		71
+#define RF24_CHANNEL	   		100
 #define ADDRESS_WIDTH                   5
 #define PLOAD_WIDTH                     32
 
@@ -52,12 +65,15 @@ Connections:
 
 const UC RF24_BASE_RADIO_ID[ADDRESS_WIDTH] = {0x00,0x54,0x49,0x54,0x44};
 
+
 // Public variables
 Config_t gConfig;
 DeviceStatus_t gDevStatus[NUM_DEVICES];
 MyMessage_t sndMsg, rcvMsg;
 uint8_t *psndMsg = (uint8_t *)&sndMsg;
 uint8_t *prcvMsg = (uint8_t *)&rcvMsg;
+bool gNeedSaveBackup = FALSE;
+bool gIsStatusChanged = FALSE;
 bool gIsChanged = FALSE;
 bool gResetRF = FALSE;
 bool gResetNode = FALSE;
@@ -67,6 +83,12 @@ uint8_t _uniqueID[UNIQUE_ID_LEN];
 uint8_t m_cntRFSendFailed = 0;
 uint8_t gSendScenario = 0;
 uint8_t gSendDelayTick = 0;
+
+// add favorite function
+int8_t gLastFavoriteIndex = -1;
+uint8_t gLastFavoriteTick = 255;
+// is flash writting
+uint8_t flashWritting = 0;
 
 // Moudle variables
 bool bPowerOn = FALSE;
@@ -192,6 +214,18 @@ void wakeup_config(void) {
   NRF2401_EnableIRQ();
 }
 
+int8_t wait_flashflag_status(uint8_t flag,uint8_t status)
+{
+    uint16_t timeout = 60000;
+    while( FLASH_GetFlagStatus(flag)== status && timeout--);
+    if(!timeout) 
+    {
+      //printlog("timeout!");
+      return 1;
+    }
+    return 0;
+}
+
 void Flash_ReadBuf(uint32_t Address, uint8_t *Buffer, uint16_t Length) {
   assert_param(IS_FLASH_ADDRESS(Address));
   assert_param(IS_FLASH_ADDRESS(Address+Length));
@@ -201,34 +235,79 @@ void Flash_ReadBuf(uint32_t Address, uint8_t *Buffer, uint16_t Length) {
   }
 }
 
-void Flash_WriteBuf(uint32_t Address, uint8_t *Buffer, uint16_t Length) {
+bool Flash_WriteBuf(uint32_t Address, uint8_t *Buffer, uint16_t Length) {
   assert_param(IS_FLASH_DATA_EEPROM_ADDRESS(Address));
   assert_param(IS_FLASH_DATA_EEPROM_ADDRESS(Address+Length));
-  
+  if(flashWritting == 1)
+  {
+    //printlog("iswriting");
+    return FALSE;
+  }
+  flashWritting = 1;
   // Init Flash Read & Write
   FLASH_SetProgrammingTime(FLASH_ProgramMode_Standard);
 
   FLASH_Unlock(FLASH_MemType_Data);
   /* Wait until Data EEPROM area unlocked flag is set*/
-  while (FLASH_GetFlagStatus(FLASH_FLAG_DUL) == RESET);
-  
+  //while (FLASH_GetFlagStatus(FLASH_FLAG_DUL) == RESET);
+  if(wait_flashflag_status(FLASH_FLAG_DUL,RESET)) return FALSE;
+  // Write byte by byte
+  bool rc = TRUE;
+  uint8_t bytVerify, bytAttmpts;
+  for( uint16_t i = 0; i < Length; i++ ) {
+    bytAttmpts = 0;
+    while(++bytAttmpts <= 3) {
+      FLASH_ProgramByte(Address+i, Buffer[i]);
+      FLASH_WaitForLastOperation(FLASH_MemType_Data);
+      
+      // Read and verify the byte we just wrote
+      bytVerify = FLASH_ReadByte(Address+i);
+      if( bytVerify == Buffer[i] ) break;
+    }
+    if( bytAttmpts > 3 ) {
+      rc = FALSE;
+      break;
+    }
+  }
+  FLASH_Lock(FLASH_MemType_Data);
+  flashWritting = 0;
+  return rc;
+}
+ 
+bool Flash_WriteDataBlock(uint16_t nStartBlock, uint8_t *Buffer, uint16_t Length) {
+  // Init Flash Read & Write
+  if(flashWritting == 1) 
+  {
+    //printlog("iswriting");
+    return FALSE;
+  }
+  flashWritting = 1;
+
+  FLASH_SetProgrammingTime(FLASH_ProgramMode_Standard);
+  FLASH_Unlock(FLASH_MemType_Data);
+  //while (FLASH_GetFlagStatus(FLASH_FLAG_DUL) == RESET);
+  if(wait_flashflag_status(FLASH_FLAG_DUL,RESET)) return FALSE;
   uint8_t WriteBuf[FLASH_BLOCK_SIZE];
   uint16_t nBlockNum = (Length - 1) / FLASH_BLOCK_SIZE + 1;
-  uint16_t block;
-  for( block = 0; block < nBlockNum; block++ ) {
+  for( uint16_t block = nStartBlock; block < nStartBlock + nBlockNum; block++ ) {
     memset(WriteBuf, 0x00, FLASH_BLOCK_SIZE);
     for( uint16_t i = 0; i < FLASH_BLOCK_SIZE; i++ ) {
-      WriteBuf[i] = Buffer[block * FLASH_BLOCK_SIZE + i];
+      WriteBuf[i] = Buffer[(block - nStartBlock) * FLASH_BLOCK_SIZE + i];
     }
+#ifdef TEST
+  PC3_High;
+#endif 
     FLASH_ProgramBlock(block, FLASH_MemType_Data, FLASH_ProgramMode_Standard, WriteBuf);
-    FLASH_WaitForLastOperation(FLASH_MemType_Data);
+    // very important( FLASH_WaitForLastOperation(FLASH_MemType_Data) not usefull,cause program dead)
+    if(wait_flashflag_status(FLASH_FLAG_EOP,RESET)) return FALSE;
+#ifdef TEST
+  PC3_Low;
+#endif   
   }
-  /* Alternative option, write byte by byte
-  for( uint16_t i = 0; i < Length; i++ ) {
-    FLASH_ProgramByte(Address+i, Buffer[i]);
-  }*/
-  
   FLASH_Lock(FLASH_MemType_Data);
+
+  flashWritting = 0;
+  return TRUE;
 }
 
 uint8_t *Read_UniqueID(uint8_t *UniqueID, uint16_t Length)  
@@ -237,7 +316,7 @@ uint8_t *Read_UniqueID(uint8_t *UniqueID, uint16_t Length)
   return UniqueID;
 }
 
-// Save config to Flash
+/*// Save config to Flash
 void SaveConfig()
 {
 #ifndef ENABLE_SDTM
@@ -246,6 +325,49 @@ void SaveConfig()
     gIsChanged = FALSE;
   }
 #endif  
+}*/
+
+// Save config to Flash
+void SaveBackupConfig()
+{
+  if( gNeedSaveBackup ) {
+    // Overwrite entire config FLASH
+    if(Flash_WriteDataBlock(BACKUP_CONFIG_BLOCK_NUM, (uint8_t *)&gConfig, sizeof(gConfig)))
+    {
+      gNeedSaveBackup = FALSE;
+    }
+  }
+}
+
+// Save status to Flash
+void SaveStatusData()
+{
+    // Skip the first byte (version)
+    uint8_t pData[50] = {0};
+    uint16_t nLen = (uint16_t)(&(gConfig.nodeID)) - (uint16_t)(&gConfig);
+    memcpy(pData, (uint8_t *)&gConfig, nLen);
+    Flash_WriteBuf(FLASH_DATA_EEPROM_START_PHYSICAL_ADDRESS + 1, pData + 1, nLen - 1);
+    gIsStatusChanged = FALSE;
+}
+
+// Save config to Flash
+void SaveConfig()
+{
+  if( gIsChanged ) {
+    // Overwrite entire config FLASH
+    if(Flash_WriteDataBlock(0, (uint8_t *)&gConfig, sizeof(gConfig)))
+    {
+      gIsStatusChanged = FALSE;
+      gIsChanged = FALSE;
+      gNeedSaveBackup = TRUE;
+      return;
+    }
+  }
+
+  if( gIsStatusChanged ) {
+    // Overwrite only Static & status parameters (the first part of config FLASH)
+    SaveStatusData();
+  }  
 }
 
 // Init Device Status
@@ -260,71 +382,183 @@ void InitDeviceStatus()
   }
 }
 
+bool IsConfigInvalid() {
+  return( gConfig.version > XLA_VERSION || gConfig.version < XLA_MIN_VER_REQUIREMENT 
+       || !IS_VALID_REMOTE(gConfig.type)  || gConfig.nodeID == 0
+       || gConfig.rfPowerLevel > RF24_PA_MAX || gConfig.rfChannel > 127 || gConfig.rfDataRate > RF24_250KBPS );
+}
+
 // Load config from Flash
 void LoadConfig()
 {
     // Load the most recent settings from FLASH
     Flash_ReadBuf(FLASH_DATA_EEPROM_START_PHYSICAL_ADDRESS, (uint8_t *)&gConfig, sizeof(gConfig));
-    if( gConfig.version > XLA_VERSION || gConfig.indDevice >= NUM_DEVICES 
-          || !IS_VALID_REMOTE(gConfig.type) || isNodeIdRequired()
-            || gConfig.rfPowerLevel > RF24_PA_MAX ) {
-          //|| strcmp(gConfig.Organization, XLA_ORGANIZATION) != 0 ) {
-      memset(&gConfig, 0x00, sizeof(gConfig));
-      gConfig.version = XLA_VERSION;
-      gConfig.indDevice = 0;
-      gConfig.present = 0;
-      gConfig.inPresentation = 0;
-      gConfig.enSDTM = 0;
-      gConfig.rptTimes = 1;
-      gConfig.type = remotetypRFStandard;
-      gConfig.rfChannel = RF24_CHANNEL;
-      gConfig.rfPowerLevel = RF24_PA_LOW;
-      gConfig.rfDataRate = RF24_1MBPS;      memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
-      //sprintf(gConfig.Organization, "%s", XLA_ORGANIZATION);
-      //sprintf(gConfig.ProductName, "%s", XLA_PRODUCT_NAME);
+    if( IsConfigInvalid() ) {
+      Flash_ReadBuf(BACKUP_CONFIG_ADDRESS, (uint8_t *)&gConfig, sizeof(gConfig));
+      if( IsConfigInvalid() ) {
+        memset(&gConfig, 0x00, sizeof(gConfig));
+        gConfig.version = XLA_VERSION;
+        gConfig.indDevice = 0;
+        gConfig.present = 0;
+        gConfig.inPresentation = 0;
+        gConfig.enSDTM = 0;
+#ifdef BATCH_TEST
+        gConfig.rptTimes = 3;
+#else
+        gConfig.rptTimes = 1;
+#endif
+        gConfig.type = remotetypRFStandard;
+        gConfig.rfChannel = RF24_CHANNEL;
+        gConfig.rfPowerLevel = RF24_PA_MAX;
+        gConfig.rfDataRate = RF24_250KBPS;      
+        memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
+        //sprintf(gConfig.Organization, "%s", XLA_ORGANIZATION);
+        //sprintf(gConfig.ProductName, "%s", XLA_PRODUCT_NAME);
 
-      // Set device info
-      NodeID(0) = BASESERVICE_ADDRESS;       // NODEID_MIN_REMOTE; BASESERVICE_ADDRESS; NODEID_DUMMY
-      DeviceID(0) = NODEID_MAINDEVICE;
-      DeviceType(0) = devtypDummy;
-      gConfig.devItem[1] = gConfig.devItem[0];
-      gConfig.devItem[2] = gConfig.devItem[0];
-      gConfig.devItem[3] = gConfig.devItem[0];
-      
-      gConfig.fnScenario[0].hue.State = DEVICE_SW_ON;
-      gConfig.fnScenario[0].hue.bmRing = 0;
-      gConfig.fnScenario[0].hue.BR = BTN_FN1_BR;
-      gConfig.fnScenario[0].hue.CCT = BTN_FN1_CCT;
+        // Set device info
+        NodeID(0) = BASESERVICE_ADDRESS;       // NODEID_MIN_REMOTE; BASESERVICE_ADDRESS; NODEID_DUMMY
+        DeviceID(0) = NODEID_MAINDEVICE;
+        DeviceType(0) = devtypDummy;
+        gConfig.devItem[1] = gConfig.devItem[0];
+        gConfig.devItem[2] = gConfig.devItem[0];
+        gConfig.devItem[3] = gConfig.devItem[0];
+        
+#ifdef MAIN_LAMP_RGBW
+        gConfig.fnScenario[0].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[0].hue.bmRing = 0;
+        gConfig.fnScenario[0].hue.BR = BTN_FN1_BR;
+        gConfig.fnScenario[0].hue.CCT = BTN_FN1_W;
+        gConfig.fnScenario[0].hue.R = BTN_FN1_R;
+        gConfig.fnScenario[0].hue.G = BTN_FN1_G;
+        gConfig.fnScenario[0].hue.B = BTN_FN1_B;        
+        gConfig.fnScenario[0].scenario = BTN_FN1_SC;
+        gConfig.fnScenario[0].effect = FILTER_SP_EF_NONE;
 
-      gConfig.fnScenario[1].hue.State = DEVICE_SW_ON;
-      gConfig.fnScenario[1].hue.bmRing = 0;
-      gConfig.fnScenario[1].hue.BR = BTN_FN2_BR;
-      gConfig.fnScenario[1].hue.CCT = BTN_FN2_CCT;
+        gConfig.fnScenario[1].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[1].hue.bmRing = 0;
+        gConfig.fnScenario[1].hue.BR = BTN_FN2_BR;
+        gConfig.fnScenario[1].hue.CCT = BTN_FN2_W;
+        gConfig.fnScenario[1].hue.R = BTN_FN2_R;
+        gConfig.fnScenario[1].hue.G = BTN_FN2_G;
+        gConfig.fnScenario[1].hue.B = BTN_FN2_B;        
+        gConfig.fnScenario[1].scenario = BTN_FN2_SC;
+        gConfig.fnScenario[1].effect = FILTER_SP_EF_NONE;
 
-      gConfig.fnScenario[2].hue.State = DEVICE_SW_ON;
-      gConfig.fnScenario[2].hue.bmRing = 0;
-      gConfig.fnScenario[2].hue.BR = BTN_FN3_BR;
-      gConfig.fnScenario[2].hue.CCT = BTN_FN3_W;
-      gConfig.fnScenario[2].hue.R = BTN_FN3_R;
-      gConfig.fnScenario[2].hue.G = BTN_FN3_G;
-      gConfig.fnScenario[2].hue.B = BTN_FN3_B;
+        gConfig.fnScenario[2].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[2].hue.bmRing = 0;
+        gConfig.fnScenario[2].hue.BR = BTN_FN3_BR;
+        gConfig.fnScenario[2].hue.CCT = BTN_FN3_W;
+        gConfig.fnScenario[2].hue.R = BTN_FN3_R;
+        gConfig.fnScenario[2].hue.G = BTN_FN3_G;
+        gConfig.fnScenario[2].hue.B = BTN_FN3_B;
+        gConfig.fnScenario[2].scenario = BTN_FN3_SC;
+        gConfig.fnScenario[2].effect = FILTER_SP_EF_NONE;
 
-      gConfig.fnScenario[3].hue.State = DEVICE_SW_ON;
-      gConfig.fnScenario[3].hue.bmRing = 0;
-      gConfig.fnScenario[3].hue.BR = BTN_FN4_BR;
-      gConfig.fnScenario[3].hue.CCT = BTN_FN4_CCT;
-      
+        gConfig.fnScenario[3].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[3].hue.bmRing = 0;
+        gConfig.fnScenario[3].hue.BR = BTN_FN4_BR;
+        gConfig.fnScenario[3].hue.CCT = BTN_FN4_W;
+        gConfig.fnScenario[3].hue.R = BTN_FN4_R;
+        gConfig.fnScenario[3].hue.G = BTN_FN4_G;
+        gConfig.fnScenario[3].hue.B = BTN_FN4_B;
+        gConfig.fnScenario[3].scenario = BTN_FN4_SC;
+        gConfig.fnScenario[3].effect = FILTER_SP_EF_NONE;
+
+        gConfig.fnScenario[4].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[4].hue.bmRing = 0;
+        gConfig.fnScenario[4].hue.BR = BTN_FN5_BR;
+        gConfig.fnScenario[4].hue.CCT = BTN_FN5_W;
+        gConfig.fnScenario[4].hue.R = BTN_FN5_R;
+        gConfig.fnScenario[4].hue.G = BTN_FN5_G;
+        gConfig.fnScenario[4].hue.B = BTN_FN5_B;
+        gConfig.fnScenario[4].scenario = BTN_FN5_SC;
+        gConfig.fnScenario[4].effect = FILTER_SP_EF_NONE;
+
+        gConfig.fnScenario[5].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[5].hue.bmRing = 0;
+        gConfig.fnScenario[5].hue.BR = BTN_FN6_BR;
+        gConfig.fnScenario[5].hue.CCT = BTN_FN6_W;
+        gConfig.fnScenario[5].hue.R = BTN_FN6_R;
+        gConfig.fnScenario[5].hue.G = BTN_FN6_G;
+        gConfig.fnScenario[5].hue.B = BTN_FN6_B;
+        gConfig.fnScenario[5].scenario = BTN_FN6_SC;
+        gConfig.fnScenario[5].effect = FILTER_SP_EF_BREATH;
+
+        gConfig.fnScenario[6].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[6].hue.bmRing = 0;
+        gConfig.fnScenario[6].hue.BR = BTN_FN7_BR;
+        gConfig.fnScenario[6].hue.CCT = BTN_FN7_W;
+        gConfig.fnScenario[6].hue.R = BTN_FN7_R;
+        gConfig.fnScenario[6].hue.G = BTN_FN7_G;
+        gConfig.fnScenario[6].hue.B = BTN_FN7_B;
+        gConfig.fnScenario[6].scenario = BTN_FN7_SC;
+        gConfig.fnScenario[6].effect = FILTER_SP_EF_FLORID;
+#else
+        gConfig.fnScenario[0].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[0].hue.bmRing = 0;
+        gConfig.fnScenario[0].hue.BR = BTN_FN1_BR;
+        gConfig.fnScenario[0].hue.CCT = BTN_FN1_CCT;
+        gConfig.fnScenario[0].scenario = BTN_FN1_SC;
+        gConfig.fnScenario[0].effect = FILTER_SP_EF_NONE;
+        
+        gConfig.fnScenario[1].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[1].hue.bmRing = 0;
+        gConfig.fnScenario[1].hue.BR = BTN_FN2_BR;
+        gConfig.fnScenario[1].hue.CCT = BTN_FN2_CCT;
+        gConfig.fnScenario[1].scenario = BTN_FN2_SC;
+        gConfig.fnScenario[1].effect = FILTER_SP_EF_NONE;
+        
+        gConfig.fnScenario[2].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[2].hue.bmRing = 0;
+        gConfig.fnScenario[2].hue.BR = BTN_FN3_BR;
+        gConfig.fnScenario[2].hue.CCT = BTN_FN3_CCT;
+        gConfig.fnScenario[2].scenario = BTN_FN3_SC;
+        gConfig.fnScenario[2].effect = FILTER_SP_EF_NONE;
+        
+        gConfig.fnScenario[3].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[3].hue.bmRing = 0;
+        gConfig.fnScenario[3].hue.BR = BTN_FN4_BR;
+        gConfig.fnScenario[3].hue.CCT = BTN_FN4_CCT;
+        gConfig.fnScenario[3].scenario = BTN_FN4_SC;
+        gConfig.fnScenario[3].effect = FILTER_SP_EF_NONE;
+
+        gConfig.fnScenario[4].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[4].hue.bmRing = 0;
+        gConfig.fnScenario[4].hue.BR = BTN_FN5_BR;
+        gConfig.fnScenario[4].hue.CCT = BTN_FN5_CCT;
+        gConfig.fnScenario[4].scenario = BTN_FN5_SC;
+        gConfig.fnScenario[4].effect = FILTER_SP_EF_NONE;
+
+        gConfig.fnScenario[5].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[5].hue.bmRing = 0;
+        gConfig.fnScenario[5].hue.BR = BTN_FN6_BR;
+        gConfig.fnScenario[5].hue.CCT = BTN_FN6_CCT;
+        gConfig.fnScenario[5].scenario = BTN_FN6_SC;
+        gConfig.fnScenario[5].effect = FILTER_SP_EF_BREATH;
+
+        gConfig.fnScenario[6].hue.State = DEVICE_SW_ON;
+        gConfig.fnScenario[6].hue.bmRing = 0;
+        gConfig.fnScenario[6].hue.BR = BTN_FN7_BR;
+        gConfig.fnScenario[6].hue.CCT = BTN_FN7_CCT;
+        gConfig.fnScenario[6].scenario = BTN_FN7_SC;
+        gConfig.fnScenario[6].effect = FILTER_SP_EF_FAST_BREATH;
+#endif
+      }
       gIsChanged = TRUE;
-      SaveConfig();
     }
-    
-    // Session time parameters
+    else {
+      uint8_t bytVersion;
+      Flash_ReadBuf(BACKUP_CONFIG_ADDRESS, (uint8_t *)&bytVersion, sizeof(bytVersion));
+      if( bytVersion != gConfig.version ) gNeedSaveBackup = TRUE;
+    }
+        // Session time parameters
     gConfig.indDevice = 0;
     gConfig.inConfigMode = 0;
     gConfig.inPresentation = 0;
     oldCurrentDevID = gConfig.indDevice;
+  
+#ifdef CLASS_ROOM_TYPE
     
-    /*
     gConfig.relayKey.deviceID = 129;
     gConfig.relayKey.subDevID = 4;
     gConfig.relayKey.keys[0] = '1';
@@ -337,35 +571,98 @@ void LoadConfig()
     gConfig.devItem[1] = gConfig.devItem[0];
     gConfig.devItem[2] = gConfig.devItem[0];
     gConfig.devItem[3] = gConfig.devItem[0];
+    // blackboard light
     gConfig.devItem[1].deviceID = 255;
     gConfig.devItem[1].subDevID = 1;
+    // classroom light
     gConfig.devItem[2].deviceID = 255;
-    gConfig.devItem[2].subDevID = 2;
+    gConfig.devItem[2].subDevID = 14;
+    // curtain
+    gConfig.devItem[3].deviceID = 129;
+    gConfig.devItem[3].subDevID = 8;
     
     // Set Fn
-    /// F1
-    gConfig.fnScenario[0].bmDevice = 0x04;
+    /// F1 all light 90,5500
+    gConfig.fnScenario[0].bmDevice = 0x01;
     gConfig.fnScenario[0].scenario = 65;
-    gConfig.fnScenario[0].hue.State = 2;
+    gConfig.fnScenario[0].hue.State = 1;
     gConfig.fnScenario[0].hue.bmRing = 0;
-    /// F2
-    gConfig.fnScenario[1].bmDevice = 0x02;
+    gConfig.fnScenario[0].hue.BR = 90;
+    gConfig.fnScenario[0].hue.CCT = 5500;
+    /// F2 classroomlight 90,3000
+    gConfig.fnScenario[1].bmDevice = 0x04;
     gConfig.fnScenario[1].scenario = 66;
-    gConfig.fnScenario[1].hue.State = 2;
+    gConfig.fnScenario[1].hue.State = 1;
     gConfig.fnScenario[1].hue.bmRing = 0;
-    /// F3
-    gConfig.fnScenario[2].bmDevice = 0x01;
+    gConfig.fnScenario[1].hue.BR = 90;
+    gConfig.fnScenario[1].hue.CCT = 3000;
+    /// F3 blackboard light off
+    gConfig.fnScenario[2].bmDevice = 0x02;
     gConfig.fnScenario[2].scenario = 67;
+    gConfig.fnScenario[2].hue.State = 0;
+    gConfig.fnScenario[2].hue.bmRing = 0;
+    /// F4 classroomlight 50,5500
+    gConfig.fnScenario[3].bmDevice = 0x04;
+    gConfig.fnScenario[3].scenario = 68;
+    gConfig.fnScenario[3].hue.State = 1;
+    gConfig.fnScenario[3].hue.bmRing = 0;
+    gConfig.fnScenario[3].hue.BR = 50;
+    gConfig.fnScenario[3].hue.CCT = 3000;
+    /// F5 classroomlight light off
+    gConfig.fnScenario[4].bmDevice = 0x04;
+    gConfig.fnScenario[4].scenario = 69;
+    gConfig.fnScenario[4].hue.State = 0;
+    gConfig.fnScenario[4].hue.bmRing = 0;
+    /// F6 classroomlight light toggle
+    gConfig.fnScenario[5].bmDevice = 0x04;
+    gConfig.fnScenario[5].scenario = 71;
+    gConfig.fnScenario[5].hue.State = 2;
+    gConfig.fnScenario[5].hue.bmRing = 0;
+    /// F7 blackboard light toggle
+    gConfig.fnScenario[6].bmDevice = 0x02;
+    gConfig.fnScenario[6].scenario = 72;
+    gConfig.fnScenario[6].hue.State = 2;
+    gConfig.fnScenario[6].hue.bmRing = 0;
+    /*/// F8 curtain off
+    gConfig.fnScenario[5].bmDevice = 0x08;
+    gConfig.fnScenario[5].scenario = 70;
+    gConfig.fnScenario[5].hue.State = 0;*/
+
+#endif
+
+#ifdef HOME_VERSION
+       // Set Devices
+    gConfig.devItem[0].deviceID = 254;
+    gConfig.devItem[0].subDevID = 0;
+        // Set Fn
+    /// F1 light 100,5500
+    gConfig.fnScenario[0].bmDevice = 0x01;
+    gConfig.fnScenario[0].scenario = 0;
+    gConfig.fnScenario[0].hue.State = 1;
+    gConfig.fnScenario[0].hue.bmRing = 0;
+    gConfig.fnScenario[0].hue.BR = 100;
+    gConfig.fnScenario[0].hue.CCT = 5500;
+    /// F2 light 20
+    gConfig.fnScenario[1].bmDevice = 0x01;
+    gConfig.fnScenario[1].scenario = 0;
+    gConfig.fnScenario[1].hue.State = 1;
+    gConfig.fnScenario[1].hue.bmRing = 0;
+    gConfig.fnScenario[1].hue.BR = 20;
+    /// F3 light 60，4000
+    gConfig.fnScenario[2].bmDevice = 0x01;
+    gConfig.fnScenario[2].scenario = 0;
     gConfig.fnScenario[2].hue.State = 1;
     gConfig.fnScenario[2].hue.bmRing = 0;
-    gConfig.fnScenario[2].hue.BR = 90;
-    gConfig.fnScenario[2].hue.CCT = 5500;
-    /// F4
+    gConfig.fnScenario[2].hue.BR = 60;
+    gConfig.fnScenario[2].hue.CCT = 4000;
+    /// F4 light 10,3000
     gConfig.fnScenario[3].bmDevice = 0x01;
-    gConfig.fnScenario[3].scenario = 68;
-    gConfig.fnScenario[3].hue.State = 0;    
+    gConfig.fnScenario[3].scenario = 0;
+    gConfig.fnScenario[3].hue.State = 1;
     gConfig.fnScenario[3].hue.bmRing = 0;
-    */
+    gConfig.fnScenario[3].hue.BR = 10;
+    gConfig.fnScenario[3].hue.CCT = 3000;
+#endif
 }
 
 void UpdateNodeAddress(uint8_t _tx) {
@@ -376,6 +673,9 @@ void UpdateNodeAddress(uint8_t _tx) {
   if( _tx == NODEID_RF_SCANNER ) {
     tx_addr[0] = NODEID_RF_SCANNER;
   } else {  
+#ifdef BATCH_TEST
+    tx_addr[0] = BROADCAST_ADDRESS;
+#else
 #ifdef ENABLE_SDTM
     tx_addr[0] = CurrentDeviceID;
 #else
@@ -384,6 +684,8 @@ void UpdateNodeAddress(uint8_t _tx) {
     } else {
       tx_addr[0] = (isNodeIdRequired() ? BASESERVICE_ADDRESS : NODEID_GATEWAY);
     }
+#endif
+
 #endif
   }
   RF24L01_setup(gConfig.rfChannel, gConfig.rfDataRate, gConfig.rfPowerLevel, BROADCAST_ADDRESS);     // With openning the boardcast pipe
@@ -511,6 +813,8 @@ bool SayHelloToDevice(bool infinate) {
     SendMyMessage();
     ResetRFModule();
     SaveConfig();
+    // Save config into backup area
+    SaveBackupConfig();
     ////////////rfscanner process/////////////////////////////// 
     if( _count++ == 0 ) {
       if( isNodeIdRequired() ) {
@@ -693,7 +997,15 @@ int main( void ) {
  
   // NRF_IRQ
   NRF2401_EnableIRQ();
-
+  
+#ifdef BATCH_TEST
+  // batch test mode
+  gConfig.indDevice = 0;
+  CurrentNodeID = NODEID_MIN_REMOTE;
+  CurrentDeviceID = BROADCAST_ADDRESS;
+  memcpy(CurrentNetworkID, RF24_BASE_RADIO_ID, ADDRESS_WIDTH);
+  UpdateNodeAddress(NODEID_GATEWAY);
+#else
   // Must establish connection firstly
 #ifdef ENABLE_SDTM
   gConfig.indDevice = 0;
@@ -712,6 +1024,10 @@ int main( void ) {
     SayHelloToDevice(TRUE);
   }
 #endif
+  
+#endif
+
+
 
   // Init Watchdog
   wwdg_init();
@@ -719,7 +1035,9 @@ int main( void ) {
   // Set PowerOn flag
   bPowerOn = TRUE;
   TIM4_10ms_handler = tmrProcess;
-  
+#ifdef TEST
+   testio();
+#endif  
   while (1) {
     
     // Feed the Watchdog
@@ -732,16 +1050,26 @@ int main( void ) {
     if(gResetNode)
     {
       gResetNode = FALSE;
-      break;     
+#ifndef ENABLE_SDTM
+      if( !gConfig.enSDTM ) {
+        SayHelloToDevice(TRUE);
+      }
+#endif
     }
     ////////////rfscanner process/////////////////////////////// 
     
     // Send message if ready
     SendMyMessage();
-    
     // Save Config if Changed
-    SaveConfig();
-    
+    SaveConfig(); 
+    // Save config into backup area
+#ifdef TEST
+  PC5_High;
+#endif  
+    SaveBackupConfig();
+#ifdef TEST
+  PC5_Low;
+#endif   
     // Operation Result Indicator
     if( gDelayedOperation > 0 ) OperationIndicator();
     
@@ -778,13 +1106,10 @@ void tmrProcess() {
       gSendDelayTick = 0;
     }
   }
-  
-    ////////////rfscanner process///////////////////////////////
-    ProcessOutputCfgMsg(); 
-    // Save Config if Changed
-    SendMyMessage();
-    SaveConfig();
-    ////////////rfscanner process///////////////////////////////
+#ifdef HOME_VERSION
+  if(gLastFavoriteTick != 255 && gLastFavoriteTick < MAXFAVORITE_INTERVAL)
+    gLastFavoriteTick++;
+#endif
 }
 
 void RF24L01_IRQ_Handler() {
@@ -801,7 +1126,7 @@ void RF24L01_IRQ_Handler() {
   if (sent_info = RF24L01_was_data_sent()) {
     //Packet was sent or max retries reached
     RF24L01_clear_interrupts();
-    mutex = sent_info;
+    mutex = sent_info; 
     return;
   }
 

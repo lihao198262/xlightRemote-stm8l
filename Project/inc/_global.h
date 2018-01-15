@@ -21,6 +21,14 @@
 // Uncomment this line if need Presentation Mode
 //#define ENABLE_PRESENTATION_MODE
 
+#define BATCH_TEST
+//#define HOME_VERSION
+//#ifdef HOME_VERSION
+//#define ENABLE_SDTM
+//#endif
+#define CLASS_ROOM_TYPE
+//#define MAIN_LAMP_RGBW
+
 /* Exported types ------------------------------------------------------------*/
 // Common Data Type
 #define UC                        uint8_t
@@ -40,6 +48,13 @@
 #define OPERATOR_SUB                2
 #define OPERATOR_MUL                3
 #define OPERATOR_DIV                4
+
+// Filter (special effect)
+#define FILTER_SP_EF_NONE           0
+#define FILTER_SP_EF_BREATH         1       // Normal breathing light
+#define FILTER_SP_EF_FAST_BREATH    2       // Fast breathing light
+#define FILTER_SP_EF_FLORID         3       // Randomly altering color
+#define FILTER_SP_EF_FAST_FLORID    4       // Fast randomly altering color
 
 // Node type
 #define NODE_TYP_GW               'g'
@@ -81,6 +96,15 @@
 #define DELAY_OP_CONNECTED      0x30
 #define DELAY_OP_PPTMODE_ON     0x40
 #define DELAY_OP_PPTMODE_OFF    0x50
+
+#ifdef HOME_VERSION
+#define SLEEP_TIME   15
+#define NUM_FAVORITE 2  
+
+#define SECOND_UNIT  1
+#define MINUTE_UNIT  2
+#define HOUR_UNIT    3
+#endif
 
 // Device (lamp) type
 typedef enum
@@ -185,6 +209,7 @@ typedef struct
 {
   UC bmDevice                 :4;       // Bitmap of devices, 0 means current device
   UC scenario;                          // ScenarioID or 0 means specific Hue
+  UC effect;                            // special effect id, 0 means normal state
   Hue_t hue;
 } fnScenario_t;
 
@@ -197,6 +222,7 @@ typedef struct
 } RelayKeyInfo_t;
 
 #if XLA_VERSION > 0x07
+#define XLA_MIN_VER_REQUIREMENT   0x08
 typedef struct
 {
   // Static & status parameters
@@ -221,10 +247,14 @@ typedef struct
   UC indDevice                :3;           // Current Device Index: [0..3]
   UC reserved2                :5;
   DeviceInfo_t devItem[NUM_DEVICES];
-  fnScenario_t fnScenario[4];
+  fnScenario_t fnScenario[7];
   RelayKeyInfo_t relayKey;
+#ifdef HOME_VERSION
+  DeviceStatus_t favoritesDevStat[NUM_FAVORITE];
+#endif
 } Config_t;
 #else
+#define XLA_MIN_VER_REQUIREMENT   0x03
 typedef struct
 {
   UC version                  :8;           // Data version, other than 0xFF
@@ -251,6 +281,8 @@ typedef struct
 extern Config_t gConfig;
 extern DeviceStatus_t gDevStatus[NUM_DEVICES];
 extern bool gIsChanged;
+extern bool gNeedSaveBackup;
+extern bool gIsStatusChanged;
 extern bool gResetRF;
 extern bool gResetNode;
 
@@ -258,6 +290,10 @@ extern uint8_t _uniqueID[UNIQUE_ID_LEN];
 extern uint8_t gDelayedOperation;
 extern uint8_t gSendScenario;
 extern uint8_t gSendDelayTick;
+
+extern int8_t gLastFavoriteIndex;
+extern uint8_t gLastFavoriteTick;
+#define MAXFAVORITE_INTERVAL 100  // unit is 10ms,1s interval
 
 #define RING_ID_ALL             0
 #define RING_ID_1               1
@@ -320,5 +356,15 @@ void SetConfigMode(bool _sw, uint8_t _devIndex);
 bool SayHelloToDevice(bool infinate);
 
 #define IS_MINE_SUBID(nSID)        ((nSID) == 0 || ((nSID) & CurrentDevSubID))
+
+//#define TEST
+#ifdef TEST
+#define     PC1_Low                GPIO_ResetBits(GPIOC, GPIO_Pin_1)
+#define     PC3_Low                GPIO_ResetBits(GPIOC, GPIO_Pin_3)
+#define     PC5_Low                GPIO_ResetBits(GPIOC, GPIO_Pin_5)
+#define     PC1_High               GPIO_SetBits(GPIOC, GPIO_Pin_1)
+#define     PC3_High               GPIO_SetBits(GPIOC, GPIO_Pin_3)
+#define     PC5_High               GPIO_SetBits(GPIOC, GPIO_Pin_5)
+#endif
 
 #endif /* __GLOBAL_H */
